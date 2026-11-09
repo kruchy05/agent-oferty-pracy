@@ -50,37 +50,63 @@ Agent czyta obce strony, więc ktoś mógłby w ogłoszeniu ukryć polecenie w s
 - portale, które blokują wyszukiwarkę, są automatycznie usuwane z listy
 - przy błędzie albo końcu budżetu agent zapisuje to, co już znalazł
 
+## Struktura projektu
+
+```
+agent-oferty-pracy/
+├── app/
+│   ├── config.py      # ustawienia (z .env) i kryteria wyszukiwania
+│   ├── modele.py      # model danych Oferta (Pydantic)
+│   ├── koszty.py      # ceny, licznik kosztów, limit budżetu
+│   ├── narzedzia.py   # narzędzie pobierz_strone i sprawdzanie linków
+│   ├── agent.py       # pętla agenta: krok 1 / 2 / 3
+│   └── eksport.py     # zapis do .ods i .json
+├── szukaj.py          # uruchomienie z konsoli
+├── .env.example       # wzór ustawień (bez sekretów)
+└── requirements.txt
+```
+
 ## Uruchomienie
 
 Potrzebny jest Python 3.10+ i klucz API z [Claude Console](https://platform.claude.com).
 
-```powershell
-pip install -r requirements.txt
-setx ANTHROPIC_API_KEY "twój_klucz"
-```
+1. Zainstaluj biblioteki:
 
-Potem zamknij i otwórz PowerShell ponownie, a następnie:
+   ```powershell
+   python -m pip install -r requirements.txt
+   ```
 
-```powershell
-python agent_oferty.py
-```
+2. Skopiuj `.env.example` jako `.env` i wpisz swój klucz:
+
+   ```powershell
+   Copy-Item .env.example .env
+   code .env
+   ```
+
+   Plik `.env` jest w `.gitignore`, więc klucz nie trafi na GitHuba. Zamiast pliku można też użyć zmiennej środowiskowej `ANTHROPIC_API_KEY` (ma pierwszeństwo przed `.env`).
+
+3. Uruchom agenta:
+
+   ```powershell
+   python szukaj.py
+   ```
 
 Wyszukiwanie w sieci musi być włączone w ustawieniach organizacji w Claude Console.
 
 ## Ustawienia
 
-Na górze pliku `agent_oferty.py`:
+Domyślne wartości są w `app/config.py`. Każdą można zmienić w `.env` bez ruszania kodu:
 
-| Zmienna | Co robi |
+| Zmienna w `.env` | Co robi |
 |---|---|
-| `MODEL` | model Claude (domyślnie tani Haiku) |
+| `CLAUDE_MODEL` | model Claude (domyślnie tani Haiku) |
 | `MIN_OFERT`, `LICZBA_OFERT` | ile ofert zebrać / maksymalnie pokazać |
 | `MAKS_WIEK_DNI` | maksymalny wiek oferty |
 | `BUDZET_USD` | twardy limit kosztów na jedno uruchomienie |
 | `MAX_RUND`, `MAX_PROB_W_RUNDZIE` | limity pętli |
 | `MAX_WYSZUKIWAN`, `MAX_POBRAN_W_RUNDZIE` | ile razy szukać / ile stron czytać |
-| `PROFIL_KANDYDATA` | opis mnie, na podstawie którego model ocenia „pasuje” |
-| `SLOWA_KLUCZOWE`, `PORTALE` | czego i gdzie szukać |
+
+Kryteria wyszukiwania (`PROFIL_KANDYDATA`, `SLOWA_KLUCZOWE`, `PORTALE`) są na razie w `app/config.py`.
 
 ## Koszty
 
