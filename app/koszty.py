@@ -1,6 +1,6 @@
 # Liczenie kosztów z pola "usage" i pilnowanie budżetu.
-
-from .config import ustawienia
+# Każde wyszukiwanie ma WŁASNY licznik - wcześniej był jeden globalny i drugie wyszukiwanie
+# w tym samym procesie (np. z FastAPI) startowało z "zużytym" budżetem.
 
 # ceny za 1 mln tokenów (dokumentacja Anthropic, listopad 2026)
 # haiku liczy całe zapytanie drożej, jeśli prompt ma ponad 100 tys. tokenów
@@ -16,56 +16,65 @@ class BudzetWyczerpany(Exception):
     pass
 
 
-LICZNIK = {"wejscie": 0, "wyjscie": 0, "wyszukiwania": 0, "zapytania": 0, "pobrania": 0, "usd": 0.0}
+class Licznik:
+    def __init__(self, model, budzet_usd):
+        self.model = model
+        self.budzet_usd = budzet_usd
+        self.wejscie = 0
+        self.wyjscie = 0
+        self.wyszukiwania = 0
+        self.zapytania = 0
+        self.pobrania = 0
+        self.usd = 0.0
 
+    def cena(self):
+        # nieznany model = liczę jak sonnet, czyli drożej, na wszelki wypadek
+        return CENY.get(self.model, CENY["claude-sonnet-5-5"])
 
-def cena_modelu():
-    # nieznany model = liczę jak sonnet, czyli drożej, na wszelki wypadek
-    return CENY.get(ustawienia.claude_model, CENY["claude-sonnet-5-5"])
+    def licz(self, usage):
+        # "usage" z każdej odpowiedzi: input = co model przeczytał, output = co napisał
+        wejscie = ((usage.input_tokens or 0)
+                   + (getattr(usage, "cache_creation_input_tokens", 0) or 0)
+                   + (getattr(usage, "cache_read_input_tokens", 0) or 0))
+        wyjscie = usage.output_tokens or 0
+        narzedzia = getattr(usage, "server_tool_use", None)
+        wyszukiwania = (getattr(narzedzia, "web_search_requests", 0) or 0) if narzedzia else 0
 
+        cena = self.cena()
+        if "prog" in cena and wejscie > cena["prog"]:
+            print(f"  [UWAGA: zapytanie miało {wejscie} tokenów - powyżej progu, liczone drożej]")
+            cena_we, cena_wy = cena["wejscie_dlugie"], cena["wyjscie_dlugie"]
+        else:
+            cena_we, cena_wy = cena["wejscie"], cena["wyjscie"]
 
-def licz_koszt(usage):
-    # "usage" z każdej odpowiedzi: input = co model przeczytał, output = co napisał
-    wejscie = ((usage.input_tokens or 0)
-               + (getattr(usage, "cache_creation_input_tokens", 0) or 0)
-               + (getattr(usage, "cache_read_input_tokens", 0) or 0))
-    wyjscie = usage.output_tokens or 0
-    narzedzia = getattr(usage, "server_tool_use", None)
-    wyszukiwania = (getattr(narzedzia, "web_search_requests", 0) or 0) if narzedzia else 0
+        self.wejscie += wejscie
+        self.wyjscie += wyjscie
+        self.wyszukiwania += wyszukiwania
+        self.zapytania += 1
+        self.usd += (wejscie * cena_we + wyjscie * cena_wy) / 1_000_000 + wyszukiwania * CENA_WYSZUKIWANIA
 
-    cena = cena_modelu()
-    if "prog" in cena and wejscie > cena["prog"]:
-        print(f"  [UWAGA: zapytanie miało {wejscie} tokenów - powyżej progu, liczone drożej]")
-        cena_we, cena_wy = cena["wejscie_dlugie"], cena["wyjscie_dlugie"]
-    else:
-        cena_we, cena_wy = cena["wejscie"], cena["wyjscie"]
+    def dolicz_szacunek(self, max_tokens_wyjscia):
+        # gdy odpowiedzi nie da się odczytać, nie znam usage - doliczam koszt "na zapas"
+        self.zapytania += 1
+        self.usd += max_tokens_wyjscia * self.cena()["wyjscie"] / 1_000_000
 
-    LICZNIK["wejscie"] += wejscie
-    LICZNIK["wyjscie"] += wyjscie
-    LICZNIK["wyszukiwania"] += wyszukiwania
-    LICZNIK["zapytania"] += 1
-    LICZNIK["usd"] += (wejscie * cena_we + wyjscie * cena_wy) / 1_000_000 + wyszukiwania * CENA_WYSZUKIWANIA
+    def pilnuj(self):
+        # sprawdzam przed każdym wywołaniem API. kosztu wywołania nie znam z góry, więc limit
+        # może zostać przekroczony najwyżej o jedno wywołanie (zwykle ok. 0,01 $)
+        if self.usd >= self.budzet_usd:
+            raise BudzetWyczerpany(f"wydano {self.usd:.4f} $ z limitu {self.budzet_usd} $")
 
-
-def pilnuj_budzetu():
-    # sprawdzam przed każdym wywołaniem API. kosztu wywołania nie znam z góry, więc limit
-    # może zostać przekroczony najwyżej o jedno wywołanie (zwykle ok. 0,01 $)
-    if LICZNIK["usd"] >= ustawienia.budzet_usd:
-        raise BudzetWyczerpany(f"wydano {LICZNIK['usd']:.4f} $ z limitu {ustawienia.budzet_usd} $")
-
-
-def podsumowanie(liczba_ofert):
-    razem = LICZNIK["wejscie"] + LICZNIK["wyjscie"]
-    return [
-        ("Liczba ofert", liczba_ofert),
-        ("Liczba prób (zapytań do API)", LICZNIK["zapytania"]),
-        ("Koszt (USD)", f"{LICZNIK['usd']:.4f} $"),
-        ("Limit budżetu (USD)", f"{ustawienia.budzet_usd:.2f} $"),
-        ("Koszt na jedną ofertę (USD)", f"{LICZNIK['usd'] / liczba_ofert:.4f} $" if liczba_ofert else "-"),
-        ("Tokeny wejściowe", LICZNIK["wejscie"]),
-        ("Tokeny wyjściowe", LICZNIK["wyjscie"]),
-        ("Tokeny RAZEM", razem),
-        ("Wyszukiwania w sieci", LICZNIK["wyszukiwania"]),
-        ("Pobrane strony", LICZNIK["pobrania"]),
-        ("Model", ustawienia.claude_model),
-    ]
+    def podsumowanie(self, liczba_ofert):
+        return [
+            ("Liczba ofert", liczba_ofert),
+            ("Liczba prób (zapytań do API)", self.zapytania),
+            ("Koszt (USD)", f"{self.usd:.4f} $"),
+            ("Limit budżetu (USD)", f"{self.budzet_usd:.2f} $"),
+            ("Koszt na jedną ofertę (USD)", f"{self.usd / liczba_ofert:.4f} $" if liczba_ofert else "-"),
+            ("Tokeny wejściowe", self.wejscie),
+            ("Tokeny wyjściowe", self.wyjscie),
+            ("Tokeny RAZEM", self.wejscie + self.wyjscie),
+            ("Wyszukiwania w sieci", self.wyszukiwania),
+            ("Pobrane strony", self.pobrania),
+            ("Model", self.model),
+        ]

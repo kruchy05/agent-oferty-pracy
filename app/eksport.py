@@ -6,9 +6,6 @@ import re
 import zipfile
 from xml.sax.saxutils import escape, quoteattr
 
-from .koszty import podsumowanie
-
-
 def oferty_do_slownikow(pary):
     # model_dump() zamienia obiekt Pydantic na zwykły słownik - gotowy do JSON-a i do tabeli
     return [{**o.model_dump(), "status": status} for o, status in pary]
@@ -19,11 +16,11 @@ def zapisz_json(wiersze, sciezka):
         json.dump(wiersze, f, ensure_ascii=False, indent=2)
 
 
-KOLUMNY = ["link", "stanowisko", "firma", "miasto", "wynagrodzenie", "poziom",
-           "wymagania", "data_dodania", "pasuje", "status"]
-NAGLOWKI = ["Link", "Stanowisko", "Firma", "Miasto", "Wynagrodzenie", "Poziom",
-            "Wymagania", "Data dodania", "Pasuje", "Status"]
-SZEROKOSCI_CM = [3.2, 7.0, 5.0, 3.8, 5.0, 2.6, 11.0, 3.2, 3.8, 3.4]
+KOLUMNY = ["link", "stanowisko", "firma", "miasto", "wynagrodzenie", "poziom", "wymagania",
+           "spelnione_wymagania", "brakujace_wymagania", "data_dodania", "pasuje", "status"]
+NAGLOWKI = ["Link", "Stanowisko", "Firma", "Miasto", "Wynagrodzenie", "Poziom", "Wymagania",
+            "Spełniam", "Brakuje mi", "Data dodania", "Pasuje", "Status"]
+SZEROKOSCI_CM = [3.2, 7.0, 5.0, 3.8, 5.0, 2.6, 9.0, 7.0, 7.0, 3.2, 3.8, 3.4]
 
 NS = ('xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
       'xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
@@ -89,7 +86,8 @@ def _style_kolumn(prefiks, szerokosci):
         for i, w in enumerate(szerokosci))
 
 
-def zapisz_ods(wiersze_ofert, sciezka):
+def zapisz_ods(wiersze_ofert, sciezka, statystyki):
+    """statystyki = lista (nazwa, wartość) do arkusza "Koszty" - np. licznik.podsumowanie(...)"""
     wiersze = [_wiersz(_komorka(n, "ce1") for n in NAGLOWKI)]
     for w in wiersze_ofert:
         link = str(w.get("link", "")).strip()
@@ -99,7 +97,7 @@ def zapisz_ods(wiersze_ofert, sciezka):
     tab_oferty = _tabela("Oferty", SZEROKOSCI_CM, wiersze, "coA")
 
     wiersze2 = [_wiersz([_komorka("Statystyka", "ce1"), _komorka("Wartość", "ce1")])]
-    for nazwa, wartosc in podsumowanie(len(wiersze_ofert)):
+    for nazwa, wartosc in statystyki:
         wiersze2.append(_wiersz([_komorka(nazwa, "ce4"),
                                  _komorka(wartosc, "ce5" if isinstance(wartosc, int) else "ce2")]))
     tab_koszty = _tabela("Koszty", [7.5, 4.5], wiersze2, "coB")

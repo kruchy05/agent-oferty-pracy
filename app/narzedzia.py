@@ -1,14 +1,12 @@
 # Moje narzędzie pobierz_strone i sprawdzanie, czy oferta jeszcze żyje.
 # Czytanie strony nie ma opłaty za wyszukiwanie, płacę tylko za tokeny tekstu (ok. 10x taniej).
+# Funkcje nie trzymają żadnego stanu - lista portali i limity przychodzą z zewnątrz (z Przebiegu).
 
 import html
 import re
 from urllib.parse import urljoin, urlparse
 
 import requests
-
-from .config import PORTALE, ustawienia
-from .koszty import LICZNIK
 
 NARZEDZIE_POBIERZ = {
     "name": "pobierz_strone",
@@ -42,25 +40,23 @@ OZNAKI_WYGASLEJ = [
     "oferta została zarchiwizowana", "oferta nie jest już aktywna", "ogłoszenie nie jest już aktywne",
 ]
 
-POBRANE_AKTYWNE = set()    # linki, które agent pobrał i wyglądały na żywe - nie sprawdzam ich drugi raz
 
-
-def dozwolony_adres(url):
-    # model może pobierać TYLKO strony z moich portali. dzięki temu podstępny tekst na stronie
-    # nie namówi go do wejścia na obcy adres (np. żeby coś tam "wysłać" w linku)
+def dozwolony_adres(url, portale):
+    # model może pobierać TYLKO strony z portali tego wyszukiwania. dzięki temu podstępny tekst
+    # na stronie nie namówi go do wejścia na obcy adres (np. żeby coś tam "wysłać" w linku)
     try:
         czesci = urlparse(url)
     except ValueError:
         return False
     host = (czesci.hostname or "").lower()
-    return czesci.scheme in ("http", "https") and any(host == p or host.endswith("." + p) for p in PORTALE)
+    return czesci.scheme in ("http", "https") and any(host == p or host.endswith("." + p) for p in portale)
 
 
 def wyglada_na_wygasla(tekst_malymi):
     return any(oznaka in tekst_malymi for oznaka in OZNAKI_WYGASLEJ)
 
 
-def html_na_tekst(surowy_html, adres):
+def html_na_tekst(surowy_html, adres, portale, max_znakow):
     # wyciągam to, co przydatne: tytuł, JSON-LD (portale często trzymają tam datę i płacę), tekst i linki
     tytul = re.search(r"<title[^>]*>(.*?)</title>", surowy_html, re.S | re.I)
     jsonld = re.findall(r'<script[^>]*application/ld\+json[^>]*>(.*?)</script>', surowy_html, re.S | re.I)
@@ -68,7 +64,7 @@ def html_na_tekst(surowy_html, adres):
     linki = []
     for href in re.findall(r'<a\s[^>]*href=["\']([^"\'#]+)["\']', surowy_html, re.I):
         pelny = urljoin(adres, html.unescape(href))
-        if dozwolony_adres(pelny) and urlparse(pelny).path.count("/") >= 2 and pelny not in linki:
+        if dozwolony_adres(pelny, portale) and urlparse(pelny).path.count("/") >= 2 and pelny not in linki:
             linki.append(pelny)
 
     bez_skryptow = re.sub(r"<(script|style|noscript|svg)[^>]*>.*?</\1>", " ", surowy_html, flags=re.S | re.I)
@@ -81,39 +77,34 @@ def html_na_tekst(surowy_html, adres):
     if jsonld:
         czesci.append("DANE STRUKTURALNE (JSON-LD):\n" + "\n".join(j.strip() for j in jsonld)[:3000])
     czesci.append("TEKST STRONY:\n" + tekst)
-    wynik = "\n\n".join(czesci)[:ustawienia.max_znakow_strony]
+    wynik = "\n\n".join(czesci)[:max_znakow]
     if linki:
         wynik += "\n\nLINKI NA STRONIE:\n" + "\n".join(linki[:60])
     return wynik
 
 
-def pobierz_strone(url, pobrania_w_rundzie):
-    """Zwraca (tekst, czy_blad). Błąd nie wywala agenta - model dostaje go jako is_error i radzi sobie dalej."""
-    if not dozwolony_adres(url):
-        return "Odmowa: ten adres nie należy do dozwolonych portali.", True
-    if pobrania_w_rundzie >= ustawienia.max_pobran_w_rundzie:
-        return "Limit pobrań stron w tej rundzie wyczerpany. Zakończ i podaj listę ofert.", True
-    LICZNIK["pobrania"] += 1
+def pobierz_strone(url, portale, max_znakow):
+    """Zwraca (tekst, czy_blad, czy_aktywna). Błąd nie wywala agenta - model dostaje go jako is_error."""
+    if not dozwolony_adres(url, portale):
+        return "Odmowa: ten adres nie należy do dozwolonych portali.", True, False
     try:
         odp = requests.get(url, headers=NAGLOWKI_HTTP, timeout=15)
     except requests.RequestException as e:
-        return f"Nie udało się pobrać strony ({type(e).__name__}).", True
+        return f"Nie udało się pobrać strony ({type(e).__name__}).", True, False
     if odp.status_code in (404, 410):
-        return "Strona nie istnieje - oferta usunięta. Pomiń ją.", True
+        return "Strona nie istnieje - oferta usunięta. Pomiń ją.", True, False
     if odp.status_code >= 400:
-        return f"Błąd HTTP {odp.status_code} - portal nie pozwala pobrać strony. Spróbuj innego źródła.", True
+        return f"Błąd HTTP {odp.status_code} - portal nie pozwala pobrać strony. Spróbuj innego źródła.", True, False
 
-    tekst = html_na_tekst(odp.text, odp.url)
+    tekst = html_na_tekst(odp.text, odp.url, portale, max_znakow)
     if wyglada_na_wygasla(tekst.lower()):
-        tekst = "[UWAGA: na stronie jest komunikat, że oferta wygasła lub jest archiwalna]\n\n" + tekst
-    else:
-        POBRANE_AKTYWNE.add(url)
-    return tekst, False
+        return "[UWAGA: na stronie jest komunikat, że oferta wygasła lub jest archiwalna]\n\n" + tekst, False, False
+    return tekst, False, True
 
 
-def sprawdz_link(url):
+def sprawdz_link(url, pobrane_aktywne):
     """Zwraca: "aktywna", "wygasła" albo "nie sprawdzono"."""
-    if url in POBRANE_AKTYWNE:
+    if url in pobrane_aktywne:
         return "aktywna"   # agent już ją czytał i była żywa
     if not str(url).startswith("http"):
         return "wygasła"

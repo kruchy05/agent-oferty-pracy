@@ -1,5 +1,6 @@
-# Ustawienia agenta. Liczby i klucz można nadpisać w pliku .env albo zmiennymi środowiskowymi
+# Ustawienia serwera / programu. Liczby i klucz można nadpisać w pliku .env albo zmiennymi środowiskowymi
 # (zmienne środowiskowe wygrywają z .env - tak działa pydantic-settings).
+# Kryteria wyszukiwania (stanowisko, kwalifikacje...) NIE są tutaj - przychodzą z formularza albo z konsoli.
 
 from pathlib import Path
 from typing import Optional
@@ -19,16 +20,17 @@ class Ustawienia(BaseSettings):
         extra="ignore",   # inne zmienne w .env (np. dane bazy) nie wywalają startu
     )
 
+    # klucz tylko do uruchamiania z konsoli - na stronie każdy wkleja swój
     # SecretStr - przy przypadkowym print() pokaże ********** zamiast klucza
     anthropic_api_key: Optional[SecretStr] = None
 
     claude_model: str = "claude-haiku-5-5"   # haiku jest dużo tańszy, sonnet dokładniejszy
     min_ofert: int = 10                      # szukam, aż mam tyle dobrych ofert
-    liczba_ofert: int = 20                   # więcej niż tyle nie wrzucam do tabeli
+    liczba_ofert: int = 20                   # więcej niż tyle nie oddaję w wynikach
     maks_wiek_dni: int = 60                  # tylko oferty z ostatnich 2 miesięcy
 
     # kontrola kosztów
-    budzet_usd: float = 0.15                 # twardy limit na jedno uruchomienie
+    budzet_max_usd: float = 1.0              # twardy sufit - nawet jak ktoś wpisze więcej w formularzu
     max_rund: int = 3
     max_prob_w_rundzie: int = 10
     max_wyszukiwan: int = 2                  # wyszukiwanie kosztuje 0,01 $, więc szukam mało, a więcej czytam
@@ -41,37 +43,3 @@ class Ustawienia(BaseSettings):
 
 
 ustawienia = Ustawienia()
-
-
-# ---------- KRYTERIA WYSZUKIWANIA (w etapie 2 przejdą do formularza) ----------
-
-PROFIL_KANDYDATA = """Początkujący programista, bez doświadczenia komercyjnego.
-Zna podstawy Pythona, ma kilka certyfikatów, robi własne projekty z AI (API modeli językowych, agenci).
-Chce rozwijać się w programowaniu i inżynierii AI. Angielski komunikatywny."""
-
-LOKALIZACJE = ("Wrocław, Legnica i okolice (stacjonarnie lub hybrydowo) albo praca w 100% zdalna "
-               "(także w firmach zagranicznych, po angielsku)")
-
-SLOWA_KLUCZOWE = [
-    "junior Python developer",
-    "junior AI engineer",
-    "AI / ML intern",
-    "stażysta programista",
-    "praktyki IT",
-    "junior data engineer",
-]
-
-# nofluffjobs blokuje wyszukiwarkę Claude, więc go tu nie ma
-PORTALE = [
-    "justjoin.it",
-    "theprotocol.it",
-    "rocketjobs.pl",
-    "pracuj.pl",
-    "pl.indeed.com",
-    "olx.pl",
-    "linkedin.com",
-    "remoteok.com",
-    "weworkremotely.com",
-    "wellfound.com",
-]
-LICZBA_GRUP = 3   # każda runda szuka na innej grupie portali
