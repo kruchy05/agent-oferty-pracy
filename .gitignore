@@ -6,8 +6,9 @@ oferty_*.html
 oferty_*.json
 widziane_oferty.json
 
-# pliki blokady LibreOffice (powstają, gdy arkusz jest otwarty)
+# pliki blokady (powstają, gdy arkusz jest otwarty)
 .~lock.*#
+~$*
 
 # moje notatki
 objasnienie.txt
@@ -25,3 +26,6 @@ venv/
 # systemowe
 .DS_Store
 Thumbs.db
+
+# pliki wysłane przez Claude (kopie do pobrania)
+Claude outputs/
