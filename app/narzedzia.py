@@ -158,9 +158,15 @@ def _opis_oferty_jobposting(o):
         miasta.append("zdalnie")
     placa = o.get("baseSalary")
     if isinstance(placa, dict):
-        wartosc = placa.get("value") if isinstance(placa.get("value"), dict) else {}
-        placa = (f"{wartosc.get('minValue', '')}-{wartosc.get('maxValue', wartosc.get('value', ''))} "
-                 f"{placa.get('currency', '')} / {wartosc.get('unitText', '')}").strip()
+        wartosc = placa.get("value") if isinstance(placa.get("value"), dict) else {"value": placa.get("value")}
+        od, do = wartosc.get("minValue"), wartosc.get("maxValue") or wartosc.get("value")
+        # justjoin.it potrafi podać samo maxValue (np. 130 PLN/h) - wtedy bez myślnika
+        kwota = f"{od}-{do}" if od and do and od != do else str(od or do or "")
+        jednostka = f" / {wartosc['unitText']}" if wartosc.get("unitText") else ""
+        placa = f"{kwota} {placa.get('currency', '')}{jednostka}".strip() if kwota else None
+    umowa = o.get("employmentType")
+    if isinstance(umowa, list):
+        umowa = ", ".join(str(u) for u in umowa)
     opis = re.sub(r"<[^>]+>", " ", html.unescape(str(o.get("description") or "")))
     opis = re.sub(r"\s+", " ", opis).strip()[:700]
 
@@ -174,7 +180,7 @@ def _opis_oferty_jobposting(o):
     return (f"OFERTA: {_tekst(o.get('title'), 150)}{uwaga}\n"
             f"firma: {_tekst(firma, 100)} | miasto: {_tekst(', '.join(miasta), 100)} | płaca: {_tekst(placa, 100)}\n"
             f"dodana: {_tekst(o.get('datePosted'), 10)} | ważna do: {wazna_do or '-'} | "
-            f"umowa: {_tekst(o.get('employmentType'), 60)} | doświadczenie: {_tekst(o.get('experienceRequirements'), 120)}\n"
+            f"umowa: {_tekst(umowa, 60)} | doświadczenie: {_tekst(o.get('experienceRequirements'), 120)}\n"
             f"opis: {opis or '-'}")
 
 
