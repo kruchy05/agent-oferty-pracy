@@ -2,6 +2,7 @@
 # Czytanie strony nie ma opłaty za wyszukiwanie, płacę tylko za tokeny tekstu (ok. 10x taniej).
 # Funkcje nie trzymają żadnego stanu - lista portali i limity przychodzą z zewnątrz (z Przebiegu).
 
+import datetime
 import html
 import json
 import re
@@ -122,8 +123,95 @@ def oferty_z_next_data(surowy_html, adres, portale):
             + "\n".join(wiersze))
 
 
+MAX_TEKSTU_PRZY_DANYCH = 2500   # gdy strona ma dane strukturalne, sam tekst to głównie menu i filtry
+
+
+def _obiekty_z_typem(dane):
+    # JSON-LD bywa zagnieżdżony (np. CollectionPage -> mainEntity -> ItemList) albo w "@graph" - przechodzę wszystko
+    if isinstance(dane, dict):
+        if "@type" in dane:
+            yield dane
+        for wartosc in dane.values():
+            yield from _obiekty_z_typem(wartosc)
+    elif isinstance(dane, list):
+        for wartosc in dane:
+            yield from _obiekty_z_typem(wartosc)
+
+
+def _typy(obiekt):
+    typ = obiekt.get("@type")
+    return set(typ) if isinstance(typ, list) else {typ}
+
+
+def _opis_oferty_jobposting(o):
+    """Najważniejsze pola z JobPosting (schema.org) w jednej linii zamiast całego JSON-a."""
+    firma = o.get("hiringOrganization")
+    firma = firma.get("name") if isinstance(firma, dict) else firma
+    miejsca = o.get("jobLocation") or []
+    miejsca = miejsca if isinstance(miejsca, list) else [miejsca]
+    miasta = []
+    for m in miejsca:
+        adres = m.get("address") if isinstance(m, dict) else None
+        if isinstance(adres, dict) and adres.get("addressLocality"):
+            miasta.append(adres["addressLocality"])
+    if o.get("jobLocationType") == "TELECOMMUTE":
+        miasta.append("zdalnie")
+    placa = o.get("baseSalary")
+    if isinstance(placa, dict):
+        wartosc = placa.get("value") if isinstance(placa.get("value"), dict) else {}
+        placa = (f"{wartosc.get('minValue', '')}-{wartosc.get('maxValue', wartosc.get('value', ''))} "
+                 f"{placa.get('currency', '')} / {wartosc.get('unitText', '')}").strip()
+    opis = re.sub(r"<[^>]+>", " ", html.unescape(str(o.get("description") or "")))
+    opis = re.sub(r"\s+", " ", opis).strip()[:700]
+
+    wazna_do = str(o.get("validThrough") or "")[:10]
+    uwaga = ""
+    try:
+        if wazna_do and datetime.date.fromisoformat(wazna_do) < datetime.date.today():
+            uwaga = " [oferta wygasła - termin ważności minął]"   # tekst łapany przez OZNAKI_WYGASLEJ
+    except ValueError:
+        pass
+    return (f"OFERTA: {_tekst(o.get('title'), 150)}{uwaga}\n"
+            f"firma: {_tekst(firma, 100)} | miasto: {_tekst(', '.join(miasta), 100)} | płaca: {_tekst(placa, 100)}\n"
+            f"dodana: {_tekst(o.get('datePosted'), 10)} | ważna do: {wazna_do or '-'} | "
+            f"umowa: {_tekst(o.get('employmentType'), 60)} | doświadczenie: {_tekst(o.get('experienceRequirements'), 120)}\n"
+            f"opis: {opis or '-'}")
+
+
+def opis_jsonld(bloki, portale):
+    """Zamienia JSON-LD na krótki tekst: lista ofert (ItemList) i szczegóły ofert (JobPosting).
+    Przykład z życia: justjoin.it trzyma 50 ofert listy w ItemList, a wcześniej ucinałem JSON na 3000 znakach."""
+    lista, oferty, reszta = [], [], []
+    for surowy in bloki:
+        try:
+            dane = json.loads(surowy)
+        except ValueError:
+            reszta.append(surowy.strip()[:1000])
+            continue
+        for obiekt in _obiekty_z_typem(dane):
+            typy = _typy(obiekt)
+            if "ItemList" in typy:
+                for el in obiekt.get("itemListElement") or []:
+                    if not isinstance(el, dict):
+                        continue
+                    przedmiot = el.get("item") if isinstance(el.get("item"), dict) else {}
+                    url = el.get("url") or przedmiot.get("url") or (el.get("item") if isinstance(el.get("item"), str) else "")
+                    nazwa = el.get("name") or przedmiot.get("name") or przedmiot.get("title") or "-"
+                    if url and dozwolony_adres(url, portale) and not any(url in w for w in lista):
+                        lista.append(f"- {nazwa} | {url}")
+            elif "JobPosting" in typy:
+                oferty.append(_opis_oferty_jobposting(obiekt))
+    czesci = []
+    if lista:
+        czesci.append(f"LISTA OFERT ZE STRONY ({len(lista)}, nazwa | link - firma jest zwykle w linku):\n" + "\n".join(lista))
+    czesci += oferty
+    if not czesci and reszta:
+        czesci.append("DANE STRUKTURALNE (JSON-LD):\n" + "\n".join(reszta)[:3000])
+    return "\n\n".join(czesci), bool(lista or oferty)
+
+
 def html_na_tekst(surowy_html, adres, portale, max_znakow):
-    # wyciągam to, co przydatne: tytuł, JSON-LD (portale często trzymają tam datę i płacę), tekst i linki
+    # wyciągam to, co przydatne: tytuł, JSON-LD (portale często trzymają tam listę ofert, datę i płacę), tekst i linki
     tytul = re.search(r"<title[^>]*>(.*?)</title>", surowy_html, re.S | re.I)
     jsonld = re.findall(r'<script[^>]*application/ld\+json[^>]*>(.*?)</script>', surowy_html, re.S | re.I)
 
@@ -140,14 +228,18 @@ def html_na_tekst(surowy_html, adres, portale, max_znakow):
     tekst = re.sub(r"\n\s*\n+", "\n", tekst).strip()
 
     czesci = [f"TYTUŁ: {html.unescape(tytul.group(1)).strip() if tytul else '-'}"]
+    dane_jsonld, sa_oferty = opis_jsonld(jsonld, portale)
     next_data = oferty_z_next_data(surowy_html, adres, portale)
+    if dane_jsonld:
+        czesci.append(dane_jsonld)
     if next_data:
         czesci.append(next_data[:max_znakow // 2])   # max połowa limitu, żeby został też tekst strony
-    if jsonld:
-        czesci.append("DANE STRUKTURALNE (JSON-LD):\n" + "\n".join(j.strip() for j in jsonld)[:3000])
-    czesci.append("TEKST STRONY:\n" + tekst)
+    sa_dane = sa_oferty or bool(next_data)
+    # gdy oferty są już w danych strukturalnych, tekst strony to głównie menu - biorę tylko początek
+    czesci.append("TEKST STRONY:\n" + (tekst[:MAX_TEKSTU_PRZY_DANYCH] if sa_dane else tekst))
     wynik = "\n\n".join(czesci)[:max_znakow]
-    if linki:
+    if linki and not sa_dane:
+        # przy danych strukturalnych linki do ofert już są w liście - nie dublują tokenów
         wynik += "\n\nLINKI NA STRONIE:\n" + "\n".join(linki[:60])
     return wynik
 
