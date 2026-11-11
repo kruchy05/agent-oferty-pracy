@@ -67,48 +67,119 @@ def _tekst(wartosc, dlugosc=80):
     return str(wartosc)[:dlugosc] if wartosc not in (None, "", [], {}) else "-"
 
 
+def _pole(obiekt, fragmenty, glebokosc=2):
+    """Pierwsza niepusta wartość z klucza, którego nazwa zawiera któryś fragment (np. 'workplace' w 'displayWorkplace').
+    Szukam też głębiej (np. offers[0].displayWorkplace) - portale różnie nazywają i zagnieżdżają pola."""
+    if isinstance(obiekt, dict):
+        for klucz, wartosc in obiekt.items():
+            if not any(f in klucz.lower() for f in fragmenty):
+                continue
+            if isinstance(wartosc, list) and wartosc and all(isinstance(w, str) for w in wartosc):
+                return ", ".join(wartosc)   # np. positionLevels: ["pracownik fizyczny"]
+            if isinstance(wartosc, (str, int, float)) and str(wartosc).strip():
+                return wartosc
+        if glebokosc:
+            for wartosc in obiekt.values():
+                if isinstance(wartosc, (dict, list)):
+                    znalezione = _pole(wartosc, fragmenty, glebokosc - 1)
+                    if znalezione:
+                        return znalezione
+    elif isinstance(obiekt, list) and glebokosc:
+        for wartosc in obiekt[:3]:
+            znalezione = _pole(wartosc, fragmenty, glebokosc - 1)
+            if znalezione:
+                return znalezione
+    return None
+
+
+# po tym poznaję adres oferty i adres profilu firmy (żeby agent nie czytał profili zamiast ofert)
+WYGLADA_NA_OFERTE = re.compile(r",oferta,|/oferta|/job-offer/|/jobs/view/|/remote-jobs/|/praca/[^/]+")
+WYGLADA_NA_FIRME = re.compile(r"pracodawcy\.|/company/|/companies/|/firma/|/employer|/brands?/|\.(png|jpe?g|svg|webp)$")
+
+
+def _link_oferty(obiekt, adres, portale, glebokosc=2):
+    """Link do oferty: najpierw znane pola (slug / url), potem dowolny adres https:// z dozwolonego portalu
+    (pracuj.pl trzyma go pod inną nazwą i głębiej - przez to wcześniej oferty nie miały linków)."""
+    host = (urlparse(adres).hostname or "").lower()
+    slug = obiekt.get("slug") or obiekt.get("url") or obiekt.get("offerUrl")
+    if isinstance(slug, str) and slug:
+        if slug.startswith("http"):
+            link = slug
+        elif host.endswith("justjoin.it"):
+            link = f"https://justjoin.it/job-offer/{slug.strip('/')}"   # tak wyglądają linki do ofert
+        else:
+            link = urljoin(adres, slug)
+        if dozwolony_adres(link, portale):
+            return link
+
+    # zbieram wszystkie adresy z obiektu i wybieram ten, który najbardziej wygląda na ofertę.
+    # wcześniej brałem pierwszy z brzegu i przy pracuj.pl trafiał się profil firmy (pracodawcy.pracuj.pl/company/...)
+    kandydaci = []
+
+    def zbierz(o, g, klucz=""):
+        if isinstance(o, str):
+            if o.startswith("http") and dozwolony_adres(o, portale) and urlparse(o).path.count("/") >= 2:
+                kandydaci.append((klucz.lower(), o))
+        elif isinstance(o, dict):
+            for k, w in o.items():
+                if isinstance(w, str) or g:
+                    zbierz(w, g if isinstance(w, str) else g - 1, k)
+        elif isinstance(o, list) and g:
+            for w in o[:3]:
+                zbierz(w, g - 1, klucz)
+
+    def ocena(kandydat):
+        klucz, url = kandydat
+        u = url.lower()
+        if WYGLADA_NA_FIRME.search(u) or any(f in klucz for f in ("company", "employer", "logo", "image")):
+            return -1
+        punkty = 0
+        if WYGLADA_NA_OFERTE.search(u):
+            punkty += 2
+        if "offer" in klucz or "oferta" in klucz:
+            punkty += 1
+        return punkty
+
+    zbierz(obiekt, glebokosc)
+    dobre = [k for k in kandydaci if ocena(k) >= 0]
+    return max(dobre, key=ocena)[1] if dobre else ""
+
+
 def oferty_z_next_data(surowy_html, adres, portale):
-    """Strony w Next.js (np. justjoin.it) trzymają listę ofert w skrypcie __NEXT_DATA__, a nie w HTML-u.
-    Szukam w tym JSON-ie obiektów, które wyglądają jak oferty, i robię z nich krótką listę."""
+    """Strony w Next.js (np. pracuj.pl) trzymają listę ofert w skrypcie __NEXT_DATA__, a nie w HTML-u.
+    Szukam w tym JSON-ie obiektów, które wyglądają jak oferty, i robię z nich krótką listę.
+    Zwraca (tekst, ile_ofert_ma_link)."""
     m = re.search(r'<script[^>]*id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', surowy_html, re.S | re.I)
     if not m:
-        return ""
+        return "", 0
     try:
         dane = json.loads(m.group(1))
     except ValueError:
-        return ""
+        return "", 0
 
-    host = (urlparse(adres).hostname or "").lower()
     wiersze, widziane = [], set()
+    z_linkiem = 0
 
     def przejdz(obiekt, glebokosc=0):
+        nonlocal z_linkiem
         if glebokosc > 15 or len(wiersze) >= 60:
             return
         if isinstance(obiekt, dict):
-            tytul = obiekt.get("title") or obiekt.get("jobTitle")
+            tytul = obiekt.get("jobTitle") or obiekt.get("title")
             firma = obiekt.get("companyName") or obiekt.get("company")
             if isinstance(firma, dict):
                 firma = firma.get("name")
-            slug = obiekt.get("slug") or obiekt.get("url") or obiekt.get("offerUrl")
-            if isinstance(tytul, str) and (firma or slug):
-                link = ""
-                if isinstance(slug, str):
-                    if slug.startswith("http"):
-                        link = slug
-                    elif host.endswith("justjoin.it"):
-                        link = f"https://justjoin.it/job-offer/{slug.strip('/')}"   # tak wyglądają linki do ofert
-                    else:
-                        link = urljoin(adres, slug)
-                    if not dozwolony_adres(link, portale):
-                        link = ""
+            link = _link_oferty(obiekt, adres, portale) if isinstance(tytul, str) else ""
+            if isinstance(tytul, str) and (firma or link):
                 klucz = link or f"{tytul}|{firma}"
                 if klucz not in widziane:
                     widziane.add(klucz)
-                    miasto = obiekt.get("city") or obiekt.get("workplaceType") or obiekt.get("location")
-                    placa = obiekt.get("salary") or obiekt.get("employmentTypes")
-                    data = obiekt.get("publishedAt") or obiekt.get("createdAt") or obiekt.get("datePosted")
-                    poziom = obiekt.get("experienceLevel") or obiekt.get("seniority")
-                    wiersze.append(" | ".join([_tekst(tytul), _tekst(firma), _tekst(miasto), _tekst(poziom, 30),
+                    z_linkiem += bool(link)
+                    miasto = _pole(obiekt, ("city", "workplace", "location", "miasto"))
+                    placa = obiekt.get("salary") or obiekt.get("employmentTypes") or _pole(obiekt, ("salary", "wynagrodzenie"))
+                    data = _pole(obiekt, ("publicat", "posted", "publishedat", "createdat", "date"), glebokosc=1)
+                    poziom = _pole(obiekt, ("experience", "seniority", "positionlevel", "level"), glebokosc=1)
+                    wiersze.append(" | ".join([_tekst(tytul), _tekst(firma), _tekst(miasto), _tekst(poziom, 50),
                                                _tekst(placa, 120), _tekst(data, 25), link or "-"]))
             for wartosc in obiekt.values():
                 przejdz(wartosc, glebokosc + 1)
@@ -118,9 +189,9 @@ def oferty_z_next_data(surowy_html, adres, portale):
 
     przejdz(dane)
     if not wiersze:
-        return ""
+        return "", 0
     return ("OFERTY Z DANYCH STRONY (tytuł | firma | miasto | poziom | płaca | data | link):\n"
-            + "\n".join(wiersze))
+            + "\n".join(wiersze)), z_linkiem
 
 
 MAX_TEKSTU_PRZY_DANYCH = 2500   # gdy strona ma dane strukturalne, sam tekst to głównie menu i filtry
@@ -235,12 +306,14 @@ def html_na_tekst(surowy_html, adres, portale, max_znakow):
 
     czesci = [f"TYTUŁ: {html.unescape(tytul.group(1)).strip() if tytul else '-'}"]
     dane_jsonld, sa_oferty = opis_jsonld(jsonld, portale)
-    next_data = oferty_z_next_data(surowy_html, adres, portale)
+    next_data, next_z_linkiem = oferty_z_next_data(surowy_html, adres, portale)
     if dane_jsonld:
         czesci.append(dane_jsonld)
     if next_data:
         czesci.append(next_data[:max_znakow // 2])   # max połowa limitu, żeby został też tekst strony
-    sa_dane = sa_oferty or bool(next_data)
+    # tekst i linki obcinam TYLKO, gdy dane strukturalne naprawdę dają oferty z linkami
+    # (pracuj.pl: 43 oferty bez linków + ucięty tekst = model nie miał ani jednego adresu -> 0 ofert)
+    sa_dane = sa_oferty or next_z_linkiem >= 3
     # gdy oferty są już w danych strukturalnych, tekst strony to głównie menu - biorę tylko początek
     czesci.append("TEKST STRONY:\n" + (tekst[:MAX_TEKSTU_PRZY_DANYCH] if sa_dane else tekst))
     wynik = "\n\n".join(czesci)[:max_znakow]

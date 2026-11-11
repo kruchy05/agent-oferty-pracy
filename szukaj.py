@@ -99,8 +99,38 @@ def main(klient=None):
     print(f"Model: {ustawienia.claude_model} | min. {ustawienia.min_ofert} ofert z ostatnich "
           f"{ustawienia.maks_wiek_dni} dni | budżet: {kryteria.budzet_usd} $")
 
-    przebieg = Przebieg(klient, kryteria, widziane=wczytaj_widziane()).uruchom()
-    zapisz_widziane(przebieg.widziane | przebieg.wszystkie_linki())
+    url_bazy = ustawienia.database_url.get_secret_value() if ustawienia.database_url else None
+    szukanie_id, na_postep = None, None
+    if url_bazy:
+        from app import baza   # psycopg potrzebny tylko, gdy używam bazy
+        try:
+            baza.przygotuj_baze(url_bazy)
+            # stary plik dalej się liczy, żeby po przejściu na bazę nie płacić drugi raz za te same oferty
+            widziane = baza.widziane_linki(url_bazy) | wczytaj_widziane()
+            szukanie_id = baza.nowe_szukanie(url_bazy, kryteria)
+        except Exception as e:
+            # sprawdzam bazę PRZED płatnym wyszukiwaniem - lepiej przerwać teraz niż zgubić wyniki
+            print(f"Nie mogę połączyć się z bazą: {type(e).__name__}: {e}")
+            print("Czy kontener działa? Sprawdź: docker ps   (uruchom: docker start moj-postgres)")
+            sys.exit(1)
+        na_postep = lambda p: baza.aktualizuj_szukanie(url_bazy, szukanie_id, p)
+        print(f"Baza: zapis do Postgresa (wyszukiwanie nr {szukanie_id})")
+    else:
+        widziane = wczytaj_widziane()
+        print("Baza: brak DATABASE_URL w .env - zapis tylko do plików")
+
+    przebieg = Przebieg(klient, kryteria, widziane=widziane, na_postep=na_postep).uruchom()
+
+    if url_bazy:
+        try:
+            nowe, juz_byly = baza.zapisz_wyniki(url_bazy, przebieg, szukanie_id)
+            print(f"\nBaza: zapisano {nowe} nowych ofert" + (f" ({juz_byly} już było w bazie)" if juz_byly else ""))
+        except Exception as e:
+            # baza padła w trakcie - wyniki i tak trafią niżej do .ods / .json, a linki do pliku
+            print(f"\n[Nie udało się zapisać do bazy: {type(e).__name__}: {e}] - zapisuję widziane do pliku")
+            zapisz_widziane(przebieg.widziane | przebieg.wszystkie_linki())
+    else:
+        zapisz_widziane(przebieg.widziane | przebieg.wszystkie_linki())
 
     wiersze = oferty_do_slownikow(przebieg.wyniki())
     licznik = przebieg.licznik

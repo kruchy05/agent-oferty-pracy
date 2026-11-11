@@ -13,7 +13,7 @@ Zrobiłem go w ramach nauki budowania aplikacji z AI: wywołania API modelu jęz
 - odrzuca oferty starsze niż 2 miesiące oraz wygasłe i zarchiwizowane
 - pilnuje budżetu: sam kończy, gdy dojdzie do limitu kosztów
 - pamięta oferty z poprzednich uruchomień, więc pokazuje tylko nowe
-- zapisuje wyniki do `.ods` (arkusze **Oferty** i **Koszty**) oraz do `.json`
+- zapisuje wyniki do bazy **PostgreSQL** (bez duplikatów) oraz do `.ods` (arkusze **Oferty** i **Koszty**) i `.json`
 
 ## Jak to działa
 
@@ -33,6 +33,7 @@ Kroki 1 i 2 są osobnymi wywołaniami, bo structured outputs nie działają raze
 
 ### Jak agent oszczędza tokeny
 
+- **Strony startowe**: z kryteriów budowane są adresy list ofert (np. `pracuj.pl/praca/magazynier;kw/legnica;wp`, `justjoin.it/job-offers/wroclaw/python`), które Python pobiera, zanim zapyta model. Model dostaje je od razu i zwykle nie musi płacić za `web_search` (0,01 $ za wyszukiwanie). Wyszukiwarka zostaje jako rezerwa, gdy strony startowe dadzą za mało ofert.
 - **Cache promptu** (`cache_control` na poziomie zapytania): w pętli narzędzi każdy krok odsyła całą dotychczasową historię razem z pobranymi stronami. Z cache ta historia kosztuje 0,1× ceny zamiast pełnej (zapis do cache: 1,25×). Koszt jest liczony z rozbiciem na zwykłe wejście, zapis i odczyt cache.
 - **Dynamic filtering** (`web_search_20260318`): model filtruje wyniki wyszukiwania kodem, zanim trafią do kontekstu. Agent sprawdza w Models API (`capabilities.code_execution`), czy model to obsługuje, a jeśli API mimo to odrzuci zapytanie, sam wraca do zwykłej wyszukiwarki.
 - **Portale, które blokują pobieranie** (Indeed, OLX), nie zużywają limitu pobrań. Model wie, że ich oferty ma brać z wyników wyszukiwania.
@@ -69,7 +70,9 @@ agent-oferty-pracy/
 │   ├── prompty.py     # szablony poleceń wypełniane kryteriami
 │   ├── koszty.py      # ceny, licznik kosztów, limit budżetu
 │   ├── narzedzia.py   # narzędzie pobierz_strone i sprawdzanie linków
+│   ├── strony_startowe.py  # adresy list ofert budowane z kryteriów
 │   ├── agent.py       # klasa Przebieg: jedno wyszukiwanie, krok 1 / 2 / 3
+│   ├── baza.py        # PostgreSQL (psycopg 3): tabele, zapis ON CONFLICT, historia wyszukiwań
 │   └── eksport.py     # zapis do .ods i .json
 ├── szukaj.py          # uruchomienie z konsoli
 ├── .env.example       # wzór ustawień (bez sekretów)
@@ -95,7 +98,21 @@ Potrzebny jest Python 3.10+ i klucz API z [Claude Console](https://platform.clau
 
    Plik `.env` jest w `.gitignore`, więc klucz nie trafi na GitHuba. Zamiast pliku można też użyć zmiennej środowiskowej `ANTHROPIC_API_KEY` (ma pierwszeństwo przed `.env`).
 
-3. Uruchom agenta z moimi domyślnymi kryteriami (junior IT, Legnica / Wrocław + zdalnie):
+3. (Opcjonalnie) baza PostgreSQL, np. w Dockerze:
+
+   ```powershell
+   docker run --name moj-postgres -e POSTGRES_PASSWORD=TWOJE_HASLO -p 5432:5432 -v pgdane:/var/lib/postgresql -d postgres
+   ```
+
+   i w `.env`:
+
+   ```
+   DATABASE_URL=postgresql://postgres:TWOJE_HASLO@localhost:5432/postgres
+   ```
+
+   Tabele agent tworzy sam przy starcie. Bez `DATABASE_URL` wyniki trafiają tylko do plików.
+
+4. Uruchom agenta z moimi domyślnymi kryteriami (junior IT, Legnica / Wrocław + zdalnie):
 
    ```powershell
    python szukaj.py
@@ -129,10 +146,22 @@ Domyślne wartości są w `app/config.py`. Każdą można zmienić w `.env` bez 
 | `MAKS_WIEK_DNI` | maksymalny wiek oferty |
 | `BUDZET_MAX_USD` | najwyższy dozwolony budżet jednego wyszukiwania (domyślnie 1 $) |
 | `MAX_RUND`, `MAX_PROB_W_RUNDZIE` | limity pętli |
+| `DATABASE_URL` | adres bazy PostgreSQL (opcjonalnie) |
+| `MAX_STRON_STARTOWYCH` | ile list ofert pobrać przed pytaniem modelu (0 = wyłącz) |
 | `MAX_WYSZUKIWAN`, `MAX_POBRAN_W_RUNDZIE` | ile razy szukać / ile stron czytać |
 | `WEB_SEARCH_DYNAMICZNE` | `auto` (sprawdź model), `tak` albo `nie` - wyszukiwarka z dynamic filtering |
 
 Kryteria wyszukiwania nie są w kodzie: przychodzą z argumentów (`szukaj.py`), a w kolejnej wersji z formularza na stronie. Portale dla kategorii są w `app/portale.py`.
+
+## Baza danych
+
+| Tabela | Co trzyma |
+|---|---|
+| `oferty` | dobre oferty: stanowisko, firma, miasto, płaca, poziom, wymagania (`TEXT[]`), co spełniam / czego brakuje, data publikacji, status, `data_dodania` (kiedy trafiła do bazy), `aplikowano` (kiedy ręcznie wysłałem CV) |
+| `odrzucone` | linki odrzuconych ofert z powodem (np. „zły poziom”, „wygasłe”), żeby agent nie płacił za nie drugi raz |
+| `szukania` | każde wyszukiwanie: kryteria, status, runda, liczba ofert, koszt, tokeny |
+
+Zapis bez duplikatów: `INSERT ... ON CONFLICT (link) DO NOTHING RETURNING id`. Wszystkie zapytania mają parametry `%s`, bez f-stringów w SQL.
 
 ## Koszty
 

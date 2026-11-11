@@ -24,6 +24,10 @@ class Ustawienia(BaseSettings):
     # SecretStr - przy przypadkowym print() pokaże ********** zamiast klucza
     anthropic_api_key: Optional[SecretStr] = None
 
+    # baza Postgres, np. postgresql://postgres:HASLO@localhost:5432/postgres - hasło jest w nim, więc SecretStr.
+    # brak = wyniki tylko do plików, a widziane linki w widziane_oferty.json (jak wcześniej)
+    database_url: Optional[SecretStr] = None
+
     claude_model: str = "claude-haiku-5-5"   # haiku jest dużo tańszy, sonnet dokładniejszy
     min_ofert: int = 10                      # szukam, aż mam tyle dobrych ofert
     liczba_ofert: int = 20                   # więcej niż tyle nie oddaję w wynikach
@@ -35,6 +39,7 @@ class Ustawienia(BaseSettings):
     max_prob_w_rundzie: int = 10
     max_wyszukiwan: int = 2                  # wyszukiwanie kosztuje 0,01 $, więc szukam mało, a więcej czytam
     max_pobran_w_rundzie: int = 6
+    max_stron_startowych: int = 4            # listy ofert pobierane przez Pythona przed pytaniem modelu (0 = wyłącz)
     max_znakow_strony: int = 12_000          # ok. 3-4 tys. tokenów na stronę, żeby nie przebić progu 100k
 
     # wyszukiwarka z dynamic filtering (web_search_20260318) - model filtruje wyniki kodem, mniej tokenów.

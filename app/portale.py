@@ -44,3 +44,15 @@ def portale_dla(kategoria, zdalnie):
     else:
         portale = list(PORTALE_OGOLNE)
     return list(dict.fromkeys(portale))   # bez duplikatów, w tej samej kolejności
+
+
+def grupy_portali(portale, liczba=LICZBA_GRUP):
+    """Dzieli portale na grupy (jedna grupa = jedna runda) tak, żeby w każdej był portal, który da się pobrać.
+    Wcześniej runda potrafiła dostać sam OLX - 2 płatne wyszukiwania i zero przeczytanych stron."""
+    pobieralne = [p for p in portale if not czy_blokuje_pobieranie(p)]
+    blokujace = [p for p in portale if czy_blokuje_pobieranie(p)]
+    n = max(1, min(liczba, len(pobieralne)))
+    grupy = [pobieralne[i::n] for i in range(n)]
+    for i, p in enumerate(blokujace):
+        grupy[i % n].append(p)
+    return grupy
