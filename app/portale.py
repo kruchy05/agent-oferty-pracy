@@ -27,6 +27,15 @@ PORTALE_ZDALNE_IT = ["remoteok.com", "weworkremotely.com", "wellfound.com"]
 
 LICZBA_GRUP = 3   # każda runda szuka na innej grupie portali
 
+# portale, które blokują pobieranie stron skryptem (sprawdzone w moich uruchomieniach: zawsze BŁĄD).
+# wyszukiwarka dalej je widzi, ale nie marnuję na nie pobrań i nie sprawdzam ich linków
+BLOKUJA_POBIERANIE = {"pl.indeed.com", "olx.pl"}
+
+
+def czy_blokuje_pobieranie(host):
+    host = (host or "").lower()
+    return any(host == p or host.endswith("." + p) for p in BLOKUJA_POBIERANIE)
+
 
 def portale_dla(kategoria, zdalnie):
     """Lista portali dla kategorii. Każde wywołanie daje NOWĄ listę, więc przebiegi jej sobie nie psują."""

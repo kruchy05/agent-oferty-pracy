@@ -31,6 +31,14 @@ KROK 3: SPRAWDŹ       zwykły Python: poziom, data, czy link jeszcze działa (0
 
 Kroki 1 i 2 są osobnymi wywołaniami, bo structured outputs nie działają razem z cytowaniami, które dodaje `web_search`.
 
+### Jak agent oszczędza tokeny
+
+- **Cache promptu** (`cache_control` na poziomie zapytania): w pętli narzędzi każdy krok odsyła całą dotychczasową historię razem z pobranymi stronami. Z cache ta historia kosztuje 0,1× ceny zamiast pełnej (zapis do cache: 1,25×). Koszt jest liczony z rozbiciem na zwykłe wejście, zapis i odczyt cache.
+- **Dynamic filtering** (`web_search_20260318`): model filtruje wyniki wyszukiwania kodem, zanim trafią do kontekstu. Agent sprawdza w Models API (`capabilities.code_execution`), czy model to obsługuje, a jeśli API mimo to odrzuci zapytanie, sam wraca do zwykłej wyszukiwarki.
+- **Portale, które blokują pobieranie** (Indeed, OLX), nie zużywają limitu pobrań. Model wie, że ich oferty ma brać z wyników wyszukiwania.
+- **Strony w Next.js** (np. justjoin.it) trzymają oferty w skrypcie `__NEXT_DATA__`, a nie w HTML-u. Agent wyciąga z niego krótką listę ofert zamiast wysyłać modelowi surowy JSON.
+- **Duplikaty** (ta sama firma i stanowisko pod różnymi linkami) są odrzucane przed sprawdzaniem linków.
+
 ### Dlaczego własne narzędzie `pobierz_strone`
 
 Każde wyszukiwanie w sieci kosztuje 0,01 $, a pobranie strony to tylko tokeny tekstu (ok. 0,0004 $ za stronę na Haiku). Agent szuka więc mało, a dużo czyta, np. jedną stronę z listą ofert z filtrem „Wrocław + junior” zamiast kilku wyszukiwań. Tekst strony jest obcinany, żeby jedno zapytanie nie przekroczyło 100 tys. tokenów (powyżej Haiku liczy 5 razy drożej).
@@ -104,6 +112,12 @@ Potrzebny jest Python 3.10+ i klucz API z [Claude Console](https://platform.clau
 
 Wyszukiwanie w sieci musi być włączone w ustawieniach organizacji w Claude Console.
 
+Podgląd, co agent „widzi” na danej stronie (darmowe, nie używa API):
+
+```powershell
+python -m app.narzedzia https://justjoin.it/job-offers/wroclaw/python
+```
+
 ## Ustawienia
 
 Domyślne wartości są w `app/config.py`. Każdą można zmienić w `.env` bez ruszania kodu:
@@ -116,6 +130,7 @@ Domyślne wartości są w `app/config.py`. Każdą można zmienić w `.env` bez 
 | `BUDZET_MAX_USD` | najwyższy dozwolony budżet jednego wyszukiwania (domyślnie 1 $) |
 | `MAX_RUND`, `MAX_PROB_W_RUNDZIE` | limity pętli |
 | `MAX_WYSZUKIWAN`, `MAX_POBRAN_W_RUNDZIE` | ile razy szukać / ile stron czytać |
+| `WEB_SEARCH_DYNAMICZNE` | `auto` (sprawdź model), `tak` albo `nie` - wyszukiwarka z dynamic filtering |
 
 Kryteria wyszukiwania nie są w kodzie: przychodzą z argumentów (`szukaj.py`), a w kolejnej wersji z formularza na stronie. Portale dla kategorii są w `app/portale.py`.
 

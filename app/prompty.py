@@ -46,7 +46,7 @@ Lokalizacja: {opis_lokalizacji(kryteria)}
 <kwalifikacje>{kryteria.kwalifikacje or "nie podano"}</kwalifikacje>"""
 
 
-def polecenie_szukania(kryteria, domeny, od_kiedy, juz_mam, max_wyszukiwan, max_pobran):
+def polecenie_szukania(kryteria, domeny, od_kiedy, juz_mam, max_wyszukiwan, max_pobran, nie_do_pobrania=()):
     tekst = f"""Dzisiaj jest {datetime.date.today().isoformat()}.
 
 {blok_kandydata(kryteria)}
@@ -62,11 +62,12 @@ Strategia (ważne dla kosztów):
    daje wiele ofert naraz. Szczegóły pojedynczej oferty pobieraj tylko, gdy brakuje ważnych danych.
 3. Pomijaj oferty spoza lokalizacji kandydata, oznaczone jako wygasłe / archiwalne
    oraz wymagające wyraźnie większego doświadczenia niż ma kandydat.
+4. Nie podawaj dwa razy tej samej oferty (ta sama firma i stanowisko pod różnymi linkami).{chr(10) + "5. Tych portali NIE da się pobrać narzędziem pobierz_strone - ich oferty bierz z wyników wyszukiwania: " + ", ".join(nie_do_pobrania) + "." if nie_do_pobrania else ""}
 
 Na końcu wypisz znalezione oferty ZWYKŁYM TEKSTEM (nie JSON), każdą oddzieloną linią "---":
 link: ...
 stanowisko: ...
-firma: ...
+firma: ... (pracodawca, a nie portal czy agencja publikująca ogłoszenie; "nieznana", jeśli brak)
 miasto: ... (albo "zdalnie")
 wynagrodzenie: ... (albo "brak")
 poziom: ... (staż / junior / mid / senior / nieznany)
@@ -87,9 +88,11 @@ Dla każdej oferty ustal:
   "bez doświadczenia" albo "dla początkujących" to staż lub junior)
 - spelnione_wymagania: wymagania oferty, które kandydat spełnia według swoich kwalifikacji
 - brakujace_wymagania: wymagania oferty, których kandydatowi brakuje
-- pasuje: PASUJE (poziom pasuje do doświadczenia i kandydat ma najważniejsze wymagania),
-          NIE PASUJE (brakuje kluczowego wymagania, np. uprawnień albo lat doświadczenia, albo to inna dziedzina),
-          DO SPRAWDZENIA (za mało informacji albo braki, które mogą nie być kluczowe)
+- pasuje: PASUJE - poziom pasuje do doświadczenia kandydata (albo jest nieznany) i kandydat spełnia
+            najważniejsze wymagania; jeśli brakujace_wymagania jest puste, to zawsze PASUJE
+          NIE PASUJE - brakuje kluczowego wymagania (np. uprawnień, wymaganych lat doświadczenia)
+            albo to zupełnie inna dziedzina
+          DO SPRAWDZENIA - tylko gdy oferta nie podaje wymagań albo braki są niejasne i mogą nie być kluczowe
 - data_dodania w formacie RRRR-MM-DD albo null
 
 <oferty>

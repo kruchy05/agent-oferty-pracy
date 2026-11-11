@@ -3,7 +3,7 @@
 # Kryteria wyszukiwania (stanowisko, kwalifikacje...) NIE są tutaj - przychodzą z formularza albo z konsoli.
 
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -36,6 +36,10 @@ class Ustawienia(BaseSettings):
     max_wyszukiwan: int = 2                  # wyszukiwanie kosztuje 0,01 $, więc szukam mało, a więcej czytam
     max_pobran_w_rundzie: int = 6
     max_znakow_strony: int = 12_000          # ok. 3-4 tys. tokenów na stronę, żeby nie przebić progu 100k
+
+    # wyszukiwarka z dynamic filtering (web_search_20260318) - model filtruje wyniki kodem, mniej tokenów.
+    # "auto" = sprawdź w Models API, czy model to obsługuje; "tak" / "nie" = wymuś
+    web_search_dynamiczne: Literal["auto", "tak", "nie"] = "auto"
 
     # obecne modele nie używają temperatury - ustaw tylko dla starszego modelu
     temperatura_szukanie: Optional[float] = None

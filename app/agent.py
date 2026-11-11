@@ -16,7 +16,7 @@ from .config import ustawienia as domyslne_ustawienia
 from .koszty import BudzetWyczerpany, Licznik
 from .modele import DOZWOLONE_POZIOMY, ListaOfert
 from .narzedzia import NARZEDZIE_POBIERZ, pobierz_strone, sprawdz_link
-from .portale import LICZBA_GRUP, portale_dla
+from .portale import BLOKUJA_POBIERANIE, LICZBA_GRUP, portale_dla
 from .prompty import (SYSTEM_PORZADKOWANIE, SYSTEM_SZUKANIE, polecenie_porzadkowania,
                       polecenie_szukania)
 
@@ -24,6 +24,33 @@ from .prompty import (SYSTEM_PORZADKOWANIE, SYSTEM_SZUKANIE, polecenie_porzadkow
 def probkowanie(temperatura):
     # dodatkowe pola zapytania tylko wtedy, gdy temperatura jest ustawiona (patrz config.py)
     return {"extra_body": {"temperature": temperatura}} if temperatura is not None else {}
+
+
+# wynik sprawdzenia modelu zapamiętuję na cały proces - nie pytam Models API przy każdym wyszukiwaniu
+_DYNAMICZNE_DLA_MODELU = {}
+
+
+def czy_model_ma_dynamic_filtering(klient, model):
+    """Dynamic filtering wymaga, żeby kod uruchamiany przez model mógł wołać inne narzędzia.
+    Models API mówi to w capabilities.code_execution (darmowe zapytanie, bez tokenów)."""
+    if model not in _DYNAMICZNE_DLA_MODELU:
+        try:
+            info = klient.models.retrieve(model)
+            _DYNAMICZNE_DLA_MODELU[model] = bool(info.capabilities and info.capabilities.code_execution.supported)
+        except Exception as e:
+            print(f"  [nie udało się sprawdzić modelu ({type(e).__name__}) - zwykła wyszukiwarka]")
+            return False
+    return _DYNAMICZNE_DLA_MODELU[model]
+
+
+def klucz_duplikatu(oferta):
+    # ta sama oferta potrafi mieć kilka linków (np. 3x Gates na LinkedIn) - porównuję firmę + słowa ze stanowiska,
+    # bez dopisków typu (K/M/X) i bez kolejności słów ("Operator, Production" = "Production Operator")
+    stanowisko = re.sub(r"\(.*?\)|\[.*?\]", " ", oferta.stanowisko.lower())
+    slowa = frozenset(w for w in re.findall(r"\w+", stanowisko) if len(w) > 2)
+    firma = re.sub(r"\W+", " ", oferta.firma.lower()).strip()            # "Sp. z o.o." -> "sp z o o"
+    firma = re.sub(r"\s(sp z o o|sp k|s a|spolka.*|spółka.*|inc|ltd|gmbh)$", "", firma)
+    return firma.replace(" ", ""), slowa
 
 
 def odczytaj_date(tekst):
@@ -58,6 +85,7 @@ class Przebieg:
         self.odrzucone = []
         self.runda = 0
         self.status = "nowy"  # nowy -> trwa -> gotowe / budzet / blad
+        self.dynamiczne = False   # czy używam wyszukiwarki z dynamic filtering (ustalane w uruchom())
         self.blad = None
         self.od_kiedy = datetime.date.today() - datetime.timedelta(days=self.ust.maks_wiek_dni)
 
@@ -67,6 +95,10 @@ class Przebieg:
         """Robi rundy, aż zbierze min_ofert albo skończy się budżet. Nie rzuca wyjątków - wynik jest w status."""
         self.status = "trwa"
         try:
+            ustawienie = self.ust.web_search_dynamiczne
+            self.dynamiczne = (ustawienie == "tak" or
+                               (ustawienie == "auto" and czy_model_ma_dynamic_filtering(self.klient, self.ust.claude_model)))
+            print(f"Wyszukiwarka: {'z dynamic filtering (web_search_20260318)' if self.dynamiczne else 'zwykła (web_search_20250305)'}")
             for runda in range(self.ust.max_rund):
                 if len(self.dobre) >= self.ust.min_ofert or not self.portale:
                     break
@@ -118,23 +150,31 @@ class Przebieg:
 
     # ---------- KROK 1: ZNAJDŹ (pętla agenta z narzędziami) ----------
 
+    def narzedzie_wyszukiwania(self, domeny):
+        k = self.kryteria
+        wyszukiwarka = {
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": self.ust.max_wyszukiwan,
+            "allowed_domains": list(domeny),
+            # do user_location daję tylko pierwsze miasto (np. z "Legnica / Wrocław" -> "Legnica")
+            "user_location": {"type": "approximate", "country": "PL", "timezone": "Europe/Warsaw",
+                              **({"city": re.split(r"[/,]", k.miasto)[0].strip()} if k.miasto else {})},
+        }
+        if self.dynamiczne:
+            # model filtruje wyniki kodem, zanim trafią do kontekstu = mniej tokenów wejściowych.
+            # "excluded" - nie odsyłam sobie surowych wyników z kodu (model i tak czyta tylko wynik kodu)
+            wyszukiwarka.update(type="web_search_20260318", response_inclusion="excluded")
+        return wyszukiwarka
+
     def krok1_znajdz(self, domeny):
         k = self.kryteria
-        narzedzia = [
-            {
-                "type": "web_search_20250305",
-                "name": "web_search",
-                "max_uses": self.ust.max_wyszukiwan,
-                "allowed_domains": list(domeny),
-                # do user_location daję tylko pierwsze miasto (np. z "Legnica / Wrocław" -> "Legnica")
-                "user_location": {"type": "approximate", "country": "PL", "timezone": "Europe/Warsaw",
-                                  **({"city": re.split(r"[/,]", k.miasto)[0].strip()} if k.miasto else {})},
-            },
-            NARZEDZIE_POBIERZ,
-        ]
+        narzedzia = [self.narzedzie_wyszukiwania(domeny), NARZEDZIE_POBIERZ]
         juz_mam = [o for o, _ in self.dobre + self.odrzucone]
+        nie_do_pobrania = [d for d in domeny if d in BLOKUJA_POBIERANIE]
         wiadomosci = [{"role": "user", "content": polecenie_szukania(
-            k, domeny, self.od_kiedy, juz_mam, self.ust.max_wyszukiwan, self.ust.max_pobran_w_rundzie)}]
+            k, domeny, self.od_kiedy, juz_mam, self.ust.max_wyszukiwan, self.ust.max_pobran_w_rundzie,
+            nie_do_pobrania)}]
         zebrany_tekst = []
         pobrania = 0
 
@@ -144,8 +184,18 @@ class Przebieg:
                 odp = self.klient.messages.create(
                     model=self.ust.claude_model, max_tokens=4000, system=SYSTEM_SZUKANIE, tools=narzedzia,
                     messages=wiadomosci, **probkowanie(self.ust.temperatura_szukanie),
+                    # cache promptu: każdy krok pętli odsyła całą historię - z cache czytam ją za 0,1x ceny.
+                    # znacznik sam przesuwa się na koniec historii, więc kolejny krok czyta poprzedni
+                    cache_control={"type": "ephemeral"},
                 )
             except anthropic.BadRequestError as e:
+                if self.dynamiczne and "allowed_callers" in str(e):
+                    # model jednak nie obsługuje dynamic filtering - wracam do zwykłej wyszukiwarki
+                    print("  [ten model nie obsługuje dynamic filtering - przełączam na zwykłą wyszukiwarkę]")
+                    self.dynamiczne = False
+                    _DYNAMICZNE_DLA_MODELU[self.ust.claude_model] = False
+                    narzedzia[0] = self.narzedzie_wyszukiwania(narzedzia[0]["allowed_domains"])
+                    continue
                 # jak jakiś portal blokuje wyszukiwarkę, API odrzuca całe zapytanie - wywalam go i ponawiam
                 dozwolone = narzedzia[0]["allowed_domains"]
                 zablokowane = [d for d in re.findall(r"'([^']+)'", str(e)) if d in dozwolone]
@@ -178,9 +228,9 @@ class Przebieg:
                         tekst, blad = "Limit pobrań stron w tej rundzie wyczerpany. Zakończ i podaj listę ofert.", True
                     else:
                         url = str(blok.input.get("url", ""))
-                        tekst, blad, aktywna = pobierz_strone(url, self.portale, self.ust.max_znakow_strony)
-                        pobrania += 1
-                        if not tekst.startswith("Odmowa"):
+                        tekst, blad, aktywna, pobrano = pobierz_strone(url, self.portale, self.ust.max_znakow_strony)
+                        if pobrano:   # odmowa i portal blokujący nie zużywają limitu pobrań
+                            pobrania += 1
                             self.licznik.pobrania += 1
                         if aktywna:
                             self.pobrane_aktywne.add(url)
@@ -253,15 +303,23 @@ class Przebieg:
 
     def krok3_sprawdz(self, oferty):
         znane = self.widziane | self.wszystkie_linki()
-        nowe, juz_widziane = [], 0
+        znane_duplikaty = {klucz_duplikatu(o) for o, _ in self.dobre + self.odrzucone}
+        nowe, juz_widziane, duplikaty = [], 0, 0
         for o in oferty:
             if o.link in znane or any(o.link == n.link for n in nowe):
                 juz_widziane += 1
                 continue
+            klucz = klucz_duplikatu(o)
+            if klucz in znane_duplikaty:
+                duplikaty += 1
+                continue
+            znane_duplikaty.add(klucz)
             nowe.append(o)
         if juz_widziane:
             # wcześniej te oferty znikały po cichu i nie było wiadomo, czemu jest ich tak mało
             print(f"  pominięto {juz_widziane} ofert już widzianych wcześniej")
+        if duplikaty:
+            print(f"  pominięto {duplikaty} duplikatów (ta sama firma i stanowisko pod innym linkiem)")
         if not nowe:
             return [], []
 
