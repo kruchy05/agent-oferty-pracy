@@ -92,6 +92,11 @@ def _pole(obiekt, fragmenty, glebokosc=2):
     return None
 
 
+# po tym poznaję adres oferty i adres profilu firmy (żeby agent nie czytał profili zamiast ofert)
+WYGLADA_NA_OFERTE = re.compile(r",oferta,|/oferta|/job-offer/|/jobs/view/|/remote-jobs/|/praca/[^/]+")
+WYGLADA_NA_FIRME = re.compile(r"pracodawcy\.|/company/|/companies/|/firma/|/employer|/brands?/|\.(png|jpe?g|svg|webp)$")
+
+
 def _link_oferty(obiekt, adres, portale, glebokosc=2):
     """Link do oferty: najpierw znane pola (slug / url), potem dowolny adres https:// z dozwolonego portalu
     (pracuj.pl trzyma go pod inną nazwą i głębiej - przez to wcześniej oferty nie miały linków)."""
@@ -107,27 +112,37 @@ def _link_oferty(obiekt, adres, portale, glebokosc=2):
         if dozwolony_adres(link, portale):
             return link
 
-    def szukaj(o, g):
-        if isinstance(o, dict):
-            # klucze z "uri" / "url" / "link" sprawdzam najpierw
-            for klucz, wartosc in sorted(o.items(), key=lambda kv: not any(f in kv[0].lower() for f in ("uri", "url", "link"))):
-                if isinstance(wartosc, str) and wartosc.startswith("http") and dozwolony_adres(wartosc, portale) \
-                        and urlparse(wartosc).path.count("/") >= 2:
-                    return wartosc
-            if g:
-                for wartosc in o.values():
-                    if isinstance(wartosc, (dict, list)):
-                        znaleziony = szukaj(wartosc, g - 1)
-                        if znaleziony:
-                            return znaleziony
-        elif isinstance(o, list) and g:
-            for wartosc in o[:3]:
-                znaleziony = szukaj(wartosc, g - 1)
-                if znaleziony:
-                    return znaleziony
-        return ""
+    # zbieram wszystkie adresy z obiektu i wybieram ten, który najbardziej wygląda na ofertę.
+    # wcześniej brałem pierwszy z brzegu i przy pracuj.pl trafiał się profil firmy (pracodawcy.pracuj.pl/company/...)
+    kandydaci = []
 
-    return szukaj(obiekt, glebokosc)
+    def zbierz(o, g, klucz=""):
+        if isinstance(o, str):
+            if o.startswith("http") and dozwolony_adres(o, portale) and urlparse(o).path.count("/") >= 2:
+                kandydaci.append((klucz.lower(), o))
+        elif isinstance(o, dict):
+            for k, w in o.items():
+                if isinstance(w, str) or g:
+                    zbierz(w, g if isinstance(w, str) else g - 1, k)
+        elif isinstance(o, list) and g:
+            for w in o[:3]:
+                zbierz(w, g - 1, klucz)
+
+    def ocena(kandydat):
+        klucz, url = kandydat
+        u = url.lower()
+        if WYGLADA_NA_FIRME.search(u) or any(f in klucz for f in ("company", "employer", "logo", "image")):
+            return -1
+        punkty = 0
+        if WYGLADA_NA_OFERTE.search(u):
+            punkty += 2
+        if "offer" in klucz or "oferta" in klucz:
+            punkty += 1
+        return punkty
+
+    zbierz(obiekt, glebokosc)
+    dobre = [k for k in kandydaci if ocena(k) >= 0]
+    return max(dobre, key=ocena)[1] if dobre else ""
 
 
 def oferty_z_next_data(surowy_html, adres, portale):
@@ -164,7 +179,7 @@ def oferty_z_next_data(surowy_html, adres, portale):
                     placa = obiekt.get("salary") or obiekt.get("employmentTypes") or _pole(obiekt, ("salary", "wynagrodzenie"))
                     data = _pole(obiekt, ("publicat", "posted", "publishedat", "createdat", "date"), glebokosc=1)
                     poziom = _pole(obiekt, ("experience", "seniority", "positionlevel", "level"), glebokosc=1)
-                    wiersze.append(" | ".join([_tekst(tytul), _tekst(firma), _tekst(miasto), _tekst(poziom, 30),
+                    wiersze.append(" | ".join([_tekst(tytul), _tekst(firma), _tekst(miasto), _tekst(poziom, 50),
                                                _tekst(placa, 120), _tekst(data, 25), link or "-"]))
             for wartosc in obiekt.values():
                 przejdz(wartosc, glebokosc + 1)
