@@ -1,19 +1,92 @@
-# Uruchomienie agenta z konsoli:  python szukaj.py
-# Ustawienia i klucz API bierze z pliku .env (wzór: .env.example) albo ze zmiennych środowiskowych.
+# Uruchomienie agenta z konsoli.
+#   python szukaj.py                                   -> moje domyślne kryteria (junior IT, Legnica/Wrocław)
+#   python szukaj.py --kategoria logistyka --stanowisko magazynier --miasto Legnica \
+#                    --kwalifikacje "prawo jazdy B, wózek widłowy UDT" --doswiadczenie do_2_lat
+#   python szukaj.py --pomoc-kategorie                 -> lista kategorii
+# Klucz API bierze z .env albo ze zmiennej środowiskowej ANTHROPIC_API_KEY.
 
+import argparse
 import datetime
+import json
 import os
 import sys
 
 import anthropic
+from pydantic import ValidationError
 
-from app.agent import DOBRE, ODRZUCONE, uruchom_agenta, wczytaj_widziane, zapisz_widziane
-from app.config import ustawienia
+from app.agent import Przebieg
+from app.config import PLIK_WIDZIANE, ustawienia
 from app.eksport import oferty_do_slownikow, zapisz_json, zapisz_ods
-from app.koszty import LICZNIK, BudzetWyczerpany
+from app.modele import KryteriaSzukania
+from app.portale import KATEGORIE
+
+# moje kryteria - używane, gdy nie podam żadnych argumentów
+MOJE_KRYTERIA = {
+    "kategoria": "it",
+    "stanowisko": "junior Python developer / junior AI engineer / staż IT",
+    "kwalifikacje": ("podstawy Pythona (OOP, wyjątki, pliki, JSON, requests), SQL, Git i GitHub, "
+                     "Claude API (tool use, structured outputs), Pydantic, FastAPI, Docker - podstawy, "
+                     "kilka certyfikatów, angielski komunikatywny"),
+    "doswiadczenie": "bez_doswiadczenia",
+    "miasto": "Legnica / Wrocław",
+    "zdalnie": True,
+    "budzet_usd": 0.15,
+}
+
+
+def wczytaj_widziane():
+    try:
+        with open(PLIK_WIDZIANE, encoding="utf-8") as f:
+            return set(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+
+def zapisz_widziane(linki):
+    with open(PLIK_WIDZIANE, "w", encoding="utf-8") as f:
+        json.dump(sorted(linki), f, ensure_ascii=False, indent=1)
+
+
+def kryteria_z_argumentow():
+    p = argparse.ArgumentParser(description="Agent AI do szukania ofert pracy")
+    p.add_argument("--kategoria", choices=list(KATEGORIE))
+    p.add_argument("--stanowisko")
+    p.add_argument("--kwalifikacje")
+    p.add_argument("--doswiadczenie", choices=["bez_doswiadczenia", "do_2_lat", "2_5_lat", "5_plus"])
+    p.add_argument("--miasto", help='np. "Legnica" albo "" dla całej Polski')
+    p.add_argument("--bez-zdalnej", action="store_true", help="nie szukaj pracy w pełni zdalnej")
+    p.add_argument("--budzet", type=float, help="limit kosztów w $ (maks. 1)")
+    p.add_argument("--pomoc-kategorie", action="store_true", help="pokaż listę kategorii")
+    a = p.parse_args()
+
+    if a.pomoc_kategorie:
+        for klucz, nazwa in KATEGORIE.items():
+            print(f"  {klucz:<16} {nazwa}")
+        sys.exit(0)
+
+    dane = dict(MOJE_KRYTERIA)
+    if a.stanowisko:
+        # podane inne stanowisko = nie biorę moich domyślnych kwalifikacji, żeby nie mieszać
+        dane.update(kategoria="inna", kwalifikacje="", doswiadczenie="bez_doswiadczenia")
+    for pole, wartosc in [("kategoria", a.kategoria), ("stanowisko", a.stanowisko), ("kwalifikacje", a.kwalifikacje),
+                          ("doswiadczenie", a.doswiadczenie), ("miasto", a.miasto), ("budzet_usd", a.budzet)]:
+        if wartosc is not None:
+            dane[pole] = wartosc
+    if a.bez_zdalnej:
+        dane["zdalnie"] = False
+
+    try:
+        return KryteriaSzukania(**dane)
+    except ValidationError as e:
+        print("Błędne kryteria:")
+        for blad in e.errors():
+            print(f"  {blad['loc'][0]}: {blad['msg']}")
+        sys.exit(1)
 
 
 def main(klient=None):
+    kryteria = kryteria_z_argumentow()
+
     if klient is None:
         if ustawienia.anthropic_api_key is None:
             print("Brak klucza API. Wpisz ANTHROPIC_API_KEY do pliku .env (wzór w .env.example).")
@@ -21,40 +94,38 @@ def main(klient=None):
         # max_retries = SDK samo ponawia przy 429/529
         klient = anthropic.Anthropic(api_key=ustawienia.anthropic_api_key.get_secret_value(), max_retries=5)
 
-    print("Agent szuka ofert IT dla juniora (Wrocław / Legnica / zdalnie)")
+    print(f"Agent szuka: {kryteria.stanowisko} ({KATEGORIE[kryteria.kategoria]}), "
+          f"{kryteria.miasto or 'cała Polska'}{' + zdalnie' if kryteria.zdalnie else ''}")
     print(f"Model: {ustawienia.claude_model} | min. {ustawienia.min_ofert} ofert z ostatnich "
-          f"{ustawienia.maks_wiek_dni} dni | budżet: {ustawienia.budzet_usd} $")
+          f"{ustawienia.maks_wiek_dni} dni | budżet: {kryteria.budzet_usd} $")
 
-    try:
-        uruchom_agenta(klient)
-    except BudzetWyczerpany as e:
-        print(f"\n[Koniec budżetu: {e}] - zapisuję to, co mam")
-    except Exception as e:
-        # raz mi wszystko przepadło przez błąd w połowie, więc teraz zapisuję to, co już mam
-        print(f"\n[Przerwano z powodu błędu: {type(e).__name__}: {e}] - zapisuję to, co mam")
+    przebieg = Przebieg(klient, kryteria, widziane=wczytaj_widziane()).uruchom()
+    zapisz_widziane(przebieg.widziane | przebieg.wszystkie_linki())
 
-    widziane = wczytaj_widziane()
-    zapisz_widziane(widziane | {o.link for o, _ in DOBRE + ODRZUCONE})
-
-    wiersze = oferty_do_slownikow(DOBRE[:ustawienia.liczba_ofert])
+    wiersze = oferty_do_slownikow(przebieg.wyniki())
+    licznik = przebieg.licznik
+    plik_ods = None
     if wiersze:
         teraz = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
-        zapisz_ods(wiersze, f"oferty_{teraz}.ods")
+        plik_ods = f"oferty_{teraz}.ods"
+        zapisz_ods(wiersze, plik_ods, licznik.podsumowanie(len(wiersze)))
         zapisz_json(wiersze, f"oferty_{teraz}.json")
         print(f"\nZapisano: oferty_{teraz}.ods i oferty_{teraz}.json")
 
     print("\n===== PODSUMOWANIE =====")
+    print(f"Status: {przebieg.status}" + (f" ({przebieg.blad})" if przebieg.blad else ""))
     print(f"Liczba ofert: {len(wiersze)}")
-    print(f"Liczba prób (zapytań do API): {LICZNIK['zapytania']}")
-    print(f"Koszt: {LICZNIK['usd']:.4f} $ (limit {ustawienia.budzet_usd} $)")
+    print(f"Liczba prób (zapytań do API): {licznik.zapytania}")
+    print(f"Koszt: {licznik.usd:.4f} $ (limit {licznik.budzet_usd} $)")
     if len(wiersze) < ustawienia.min_ofert:
-        print(f"UWAGA: nie udało się zebrać {ustawienia.min_ofert} ofert (zwiększ MAX_RUND albo BUDZET_USD w .env).")
+        print(f"UWAGA: nie udało się zebrać {ustawienia.min_ofert} ofert (zwiększ --budzet albo MAX_RUND w .env).")
 
-    if wiersze:
+    if plik_ods:
         try:
-            os.startfile(os.path.abspath(f"oferty_{teraz}.ods"))   # tylko Windows
+            os.startfile(os.path.abspath(plik_ods))   # tylko Windows
         except AttributeError:
             pass
+    return przebieg
 
 
 if __name__ == "__main__":
