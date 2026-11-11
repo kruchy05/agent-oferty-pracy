@@ -16,7 +16,8 @@ from .config import ustawienia as domyslne_ustawienia
 from .koszty import BudzetWyczerpany, Licznik
 from .modele import DOZWOLONE_POZIOMY, ListaOfert
 from .narzedzia import NARZEDZIE_POBIERZ, pobierz_strone, sprawdz_link
-from .portale import BLOKUJA_POBIERANIE, LICZBA_GRUP, portale_dla
+from .portale import BLOKUJA_POBIERANIE, LICZBA_GRUP, grupy_portali, portale_dla
+from .strony_startowe import adresy_startowe
 from .prompty import (SYSTEM_PORZADKOWANIE, SYSTEM_SZUKANIE, polecenie_porzadkowania,
                       polecenie_szukania)
 
@@ -82,7 +83,7 @@ class Przebieg:
         self.portale = portale_dla(kryteria.kategoria, kryteria.zdalnie)   # własna kopia listy
         self.pobrane_aktywne = set()
         self.dobre = []       # (oferta, status) - dopisuję na bieżąco, żeby nic nie zginęło przy błędzie
-        self.odrzucone = []
+        self.odrzucone = []   # (oferta, powód odrzucenia)
         self.runda = 0
         self.status = "nowy"  # nowy -> trwa -> gotowe / budzet / blad
         self.dynamiczne = False   # czy używam wyszukiwarki z dynamic filtering (ustalane w uruchom())
@@ -126,10 +127,15 @@ class Przebieg:
 
     def _zglos_postep(self):
         if self.na_postep:
-            self.na_postep(self)
+            try:
+                self.na_postep(self)
+            except Exception as e:
+                # np. baza chwilowo niedostępna - nie przerywam przez to płatnego wyszukiwania
+                print(f"  [nie udało się zapisać postępu: {type(e).__name__}: {e}]")
 
     def _jedna_runda(self, runda):
-        domeny = self.portale[runda % LICZBA_GRUP::LICZBA_GRUP] or list(self.portale)
+        grupy = grupy_portali(self.portale, LICZBA_GRUP)
+        domeny = grupy[runda % len(grupy)]
         print(f"\n=== Runda {runda + 1} (dobrych ofert: {len(self.dobre)}/{self.ust.min_ofert}, "
               f"koszt: {self.licznik.usd:.4f} $) - portale: {', '.join(domeny)} ===")
 
@@ -167,14 +173,31 @@ class Przebieg:
             wyszukiwarka.update(type="web_search_20260318", response_inclusion="excluded")
         return wyszukiwarka
 
+    def pobierz_strony_startowe(self, domeny):
+        """Pobiera listy ofert zbudowane z kryteriów (bez modelu, 0 tokenów na samo pobranie)."""
+        adresy = adresy_startowe(self.kryteria, domeny, self.ust.max_stron_startowych)
+        if not adresy:
+            return ""
+        with ThreadPoolExecutor(max_workers=4) as pula:
+            wyniki = list(pula.map(lambda u: pobierz_strone(u, self.portale, self.ust.max_znakow_strony), adresy))
+        czesci = []
+        for url, (tekst, blad, aktywna, pobrano) in zip(adresy, wyniki):
+            print(f"     strona startowa: {url[:90]}  {'BŁĄD' if blad else 'ok'}")
+            if pobrano:
+                self.licznik.pobrania += 1
+            if not blad:
+                czesci.append(f'<strona url="{url}">\n{tekst}\n</strona>')
+        return "\n\n".join(czesci)
+
     def krok1_znajdz(self, domeny):
         k = self.kryteria
         narzedzia = [self.narzedzie_wyszukiwania(domeny), NARZEDZIE_POBIERZ]
         juz_mam = [o for o, _ in self.dobre + self.odrzucone]
         nie_do_pobrania = [d for d in domeny if d in BLOKUJA_POBIERANIE]
+        strony = self.pobierz_strony_startowe(domeny)
         wiadomosci = [{"role": "user", "content": polecenie_szukania(
             k, domeny, self.od_kiedy, juz_mam, self.ust.max_wyszukiwan, self.ust.max_pobran_w_rundzie,
-            nie_do_pobrania)}]
+            nie_do_pobrania, strony)}]
         zebrany_tekst = []
         pobrania = 0
 
@@ -213,7 +236,9 @@ class Przebieg:
 
             for blok in odp.content:
                 if blok.type == "server_tool_use" and blok.name == "web_search":
-                    print(f"     szukam: {blok.input.get('query')}")
+                    # przy dynamic filtering wyszukiwanie woła kod modelu - wtedy nie ma pola "query"
+                    zapytanie = (blok.input or {}).get("query")
+                    print(f"     szukam: {zapytanie}" if zapytanie else "     szukam (z kodu filtrującego)")
 
             if odp.stop_reason == "tool_use":
                 # model chce użyć MOJEGO narzędzia - wykonuję je i odsyłam wynik jako tool_result.
@@ -346,7 +371,7 @@ class Przebieg:
                 dobre.append((o, status))
                 continue
             powody[powod] += 1
-            odrzucone.append((o, status))
+            odrzucone.append((o, powod))
 
         print(f"  + {len(dobre)} dobrych | odrzucone: " + ", ".join(f"{k}: {v}" for k, v in powody.items() if v))
         return dobre, odrzucone
