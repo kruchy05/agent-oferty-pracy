@@ -29,3 +29,6 @@ Thumbs.db
 
 # pliki wysłane przez Claude (kopie do pobrania)
 Claude outputs/
+
+# testy
+.pytest_cache/

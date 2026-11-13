@@ -1,5 +1,7 @@
 # Agent AI do szukania ofert pracy
 
+[![Testy](https://github.com/kruchy05/agent-oferty-pracy/actions/workflows/testy.yml/badge.svg)](https://github.com/kruchy05/agent-oferty-pracy/actions/workflows/testy.yml)
+
 Agent w Pythonie, który sam przegląda portale z ofertami pracy i zbiera oferty dopasowane do podanej kategorii, stanowiska i kwalifikacji. Do każdej oferty wypisuje, co kandydat spełnia, czego mu brakuje, i ocenia, czy oferta pasuje. Zaczynałem od szukania ofert dla siebie (junior IT / AI), a teraz działa dla dowolnej branży, np. magazyn, biuro, sprzedaż.
 
 Zrobiłem go w ramach nauki budowania aplikacji z AI: wywołania API modelu językowego, własne narzędzia (tool use), structured outputs z Pydantic, kontrola kosztów, bezpieczeństwo agenta, baza danych, API i prosta strona.
@@ -23,7 +25,7 @@ Zrobiłem go w ramach nauki budowania aplikacji z AI: wywołania API modelu jęz
 
 ## Technologie
 
-Python 3.10+ · [Claude API](https://platform.claude.com) (Haiku, tool use, web search, structured outputs, prompt caching) · Pydantic + pydantic-settings · FastAPI + Uvicorn · PostgreSQL (psycopg 3) w Dockerze · HTML / CSS / JS bez bibliotek
+Python 3.10+ · [Claude API](https://platform.claude.com) (Haiku, tool use, web search, structured outputs, prompt caching) · Pydantic + pydantic-settings · FastAPI + Uvicorn · PostgreSQL (psycopg 3) w Dockerze · HTML / CSS / JS bez bibliotek · pytest + GitHub Actions
 
 ```mermaid
 flowchart LR
@@ -113,6 +115,8 @@ agent-oferty-pracy/
 ├── docs/              # zrzuty ekranu do README
 ├── static/
 │   └── index.html     # strona: formularz, postęp szukania, tabela ofert (czysty JS)
+├── tests/             # testy pytest (udawany Claude, lokalny portal, baza testowa)
+├── .github/workflows/ # testy uruchamiane automatycznie na GitHubie
 ├── szukaj.py          # uruchomienie z konsoli
 ├── .env.example       # wzór ustawień (bez sekretów)
 └── requirements.txt
@@ -249,6 +253,31 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/szukaj -Body $body -Content
 Invoke-RestMethod http://127.0.0.1:8000/szukaj/1
 Invoke-RestMethod "http://127.0.0.1:8000/oferty?pasuje=PASUJE"
 ```
+
+## Testy
+
+66 testów w `tests/`. Nie potrzebują klucza API ani internetu i nic nie kosztują:
+
+- **Claude jest udawany**: `MockTransport` z SDK odpowiada jak prawdziwe API, a testy sprawdzają też, co agent do niego wysłał (kryteria, zasady bezpieczeństwa, `cache_control`, typ wyszukiwarki),
+- **portal z ofertami** to mały serwer HTTP uruchamiany na czas testów (oferta aktualna, archiwalna, portal blokujący skrypty, ukryte „polecenie” w ogłoszeniu),
+- dane ze stron mają kształt wzięty z prawdziwych stron justjoin.it i pracuj.pl - część testów to błędy, które naprawdę mi się zdarzyły (np. profil firmy zamiast linku do oferty, ucięty tekst strony bez linków).
+
+Uruchomienie:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Testy bazy i API z bazą działają tylko z **osobną bazą testową** (testy kasują w niej tabele, więc dla bezpieczeństwa nazwa bazy musi zawierać „test”). Bez niej są pomijane:
+
+```powershell
+docker exec moj-postgres createdb -U postgres agent_testy
+$env:TEST_DATABASE_URL = "postgresql://postgres:TWOJE_HASLO@localhost:5432/agent_testy"
+python -m pytest
+```
+
+Na GitHubie testy uruchamiają się same przy każdym pushu i pull requeście (Python 3.10 i 3.13 + Postgres 18 w kontenerze).
 
 ## Koszty
 
