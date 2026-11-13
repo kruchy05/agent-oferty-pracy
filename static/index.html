@@ -72,7 +72,18 @@
        padding: 8px 6px; border-bottom: 1px solid var(--linia); white-space: nowrap; }
   td { padding: 10px 6px; border-bottom: 1px solid var(--linia); vertical-align: top; }
   td .firma { color: var(--szary); font-size: 13px; }
-  td.oferta { min-width: 170px; }
+  td.oferta { min-width: 160px; }
+  td.placa { min-width: 90px; max-width: 150px; }
+  /* węższy ekran (telefon, mały laptop): zamiast tabeli przewijanej w bok - każda oferta jako karta */
+  @media (max-width: 1180px) {
+    thead { display: none; }
+    table, tbody, tr, td { display: block; width: 100%; }
+    tr { padding: 12px 0; border-bottom: 1px solid var(--linia); }
+    td { border: 0; padding: 3px 0; max-width: none !important; }
+    td[data-etykieta]::before { content: attr(data-etykieta); display: block; font-size: 12px; color: var(--szary); }
+    td.waska { white-space: normal; }
+    td.cv { padding-top: 8px; }
+  }
   td.wymagania { min-width: 130px; max-width: 220px; }
   td ul { margin: 0; padding-left: 16px; }
   td.waska { white-space: nowrap; }
@@ -376,6 +387,8 @@ function wierszPusty(tekst) {
   return tr;
 }
 
+const ETYKIETY = [null, "Płaca", "Dopasowanie", "Spełniam", "Brakuje mi", "Dodano", null];
+
 function wiersz(o) {
   const tr = el("tr");
 
@@ -386,7 +399,7 @@ function wiersz(o) {
   tdStan.append(tytul, el("div", [o.firma, o.miasto, o.poziom].filter(Boolean).join(" · "), "firma"));
   tr.appendChild(tdStan);
 
-  tr.appendChild(el("td", o.wynagrodzenie || "-", "waska"));
+  tr.appendChild(el("td", o.wynagrodzenie || "-", "placa"));
 
   const tdPas = el("td");
   const pas = o.pasuje || "DO SPRAWDZENIA";
@@ -397,13 +410,15 @@ function wiersz(o) {
   const tdBr = el("td", null, "wymagania"); tdBr.appendChild(lista(o.brakujace_wymagania)); tr.appendChild(tdBr);
   tr.appendChild(el("td", o.data_publikacji || "-", "waska"));
 
-  const tdCv = el("td", null, "waska");
+  const tdCv = el("td", null, "waska cv");
   const btn = el("button", null, "maly");
   btn.type = "button";
   ustawPrzyciskCv(btn, o.aplikowano);
   btn.addEventListener("click", () => przelaczCv(o.id, btn));
   tdCv.appendChild(btn);
   tr.appendChild(tdCv);
+  // podpisy kolumn - widać je tylko na telefonie, gdzie wiersz jest kartą
+  [...tr.children].forEach((td, i) => { if (ETYKIETY[i]) td.dataset.etykieta = ETYKIETY[i]; });
   return tr;
 }
 
