@@ -8,6 +8,7 @@
 import datetime
 
 import psycopg
+from psycopg.rows import dict_row
 
 SCHEMAT = [
     # historia wyszukiwań - kryteria, postęp i koszt (przyda się na stronie do paska postępu)
@@ -132,3 +133,52 @@ def zapisz_wyniki(url, przebieg, szukanie_id=None):
                     (oferta.link, powod, szukanie_id),
                 )
     return nowe, juz_byly
+
+
+# ---------- odczyt dla API ----------
+
+KOLUMNY_OFERTY = """id, stanowisko, firma, miasto, wynagrodzenie, poziom, link, pasuje, wymagania,
+    spelnione_wymagania, brakujace_wymagania, data_publikacji, data_dodania, status, aplikowano, szukanie_id"""
+
+
+def lista_ofert(url, pasuje=None, szukanie_id=None, aplikowano=None, limit=100):
+    """Oferty z bazy, najnowsze pierwsze. Filtry są opcjonalne."""
+    # w SQL wklejam tylko moje stałe kawałki tekstu - wartości od użytkownika idą zawsze jako %s
+    warunki, parametry = [], []
+    if pasuje:
+        warunki.append("pasuje = %s")
+        parametry.append(pasuje)
+    if szukanie_id is not None:
+        warunki.append("szukanie_id = %s")
+        parametry.append(szukanie_id)
+    if aplikowano is not None:
+        warunki.append("aplikowano IS NOT NULL" if aplikowano else "aplikowano IS NULL")
+    gdzie = (" WHERE " + " AND ".join(warunki)) if warunki else ""
+    with polacz(url) as conn:
+        conn.row_factory = dict_row   # wiersze jako słowniki - prosto zamienić na JSON
+        return conn.execute(f"SELECT {KOLUMNY_OFERTY} FROM oferty{gdzie} ORDER BY id DESC LIMIT %s",
+                            (*parametry, limit)).fetchall()
+
+
+def jedna_oferta(url, oferta_id):
+    with polacz(url) as conn:
+        conn.row_factory = dict_row
+        return conn.execute(f"SELECT {KOLUMNY_OFERTY} FROM oferty WHERE id = %s", (oferta_id,)).fetchone()
+
+
+def oznacz_aplikowano(url, oferta_id, wyslane=True):
+    """Zaznaczam, że RĘCZNIE wysłałem CV (albo cofam). Agent sam niczego nie wysyła.
+    COALESCE - drugie kliknięcie nie nadpisuje daty pierwszego wysłania."""
+    with polacz(url) as conn:
+        conn.row_factory = dict_row
+        return conn.execute(
+            f"""UPDATE oferty SET aplikowano = CASE WHEN %s THEN COALESCE(aplikowano, NOW()) ELSE NULL END
+                WHERE id = %s RETURNING {KOLUMNY_OFERTY}""",
+            (wyslane, oferta_id),
+        ).fetchone()
+
+
+def jedno_szukanie(url, szukanie_id):
+    with polacz(url) as conn:
+        conn.row_factory = dict_row
+        return conn.execute("SELECT * FROM szukania WHERE id = %s", (szukanie_id,)).fetchone()

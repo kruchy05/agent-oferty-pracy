@@ -73,6 +73,8 @@ agent-oferty-pracy/
 │   ├── strony_startowe.py  # adresy list ofert budowane z kryteriów
 │   ├── agent.py       # klasa Przebieg: jedno wyszukiwanie, krok 1 / 2 / 3
 │   ├── baza.py        # PostgreSQL (psycopg 3): tabele, zapis ON CONFLICT, historia wyszukiwań
+│   ├── api.py         # API w FastAPI (szukanie w tle, oferty, „wysłałem CV”)
+│   ├── zadania.py     # trwające szukania w pamięci + limit szukań naraz
 │   └── eksport.py     # zapis do .ods i .json
 ├── szukaj.py          # uruchomienie z konsoli
 ├── .env.example       # wzór ustawień (bez sekretów)
@@ -150,8 +152,10 @@ Domyślne wartości są w `app/config.py`. Każdą można zmienić w `.env` bez 
 | `MAX_STRON_STARTOWYCH` | ile list ofert pobrać przed pytaniem modelu (0 = wyłącz) |
 | `MAX_WYSZUKIWAN`, `MAX_POBRAN_W_RUNDZIE` | ile razy szukać / ile stron czytać |
 | `WEB_SEARCH_DYNAMICZNE` | `auto` (sprawdź model), `tak` albo `nie` - wyszukiwarka z dynamic filtering |
+| `API_MAKS_SZUKAN` | ile szukań może iść naraz przez API (domyślnie 2) |
+| `API_KLUCZ_SERWERA` | `true` = bez nagłówka `X-Api-Key` API używa klucza z `.env`; `false` = każdy musi podać swój |
 
-Kryteria wyszukiwania nie są w kodzie: przychodzą z argumentów (`szukaj.py`), a w kolejnej wersji z formularza na stronie. Portale dla kategorii są w `app/portale.py`.
+Kryteria wyszukiwania nie są w kodzie: przychodzą z argumentów (`szukaj.py`), albo z API (`POST /szukaj`). Portale dla kategorii są w `app/portale.py`.
 
 ## Baza danych
 
@@ -162,6 +166,44 @@ Kryteria wyszukiwania nie są w kodzie: przychodzą z argumentów (`szukaj.py`),
 | `szukania` | każde wyszukiwanie: kryteria, status, runda, liczba ofert, koszt, tokeny |
 
 Zapis bez duplikatów: `INSERT ... ON CONFLICT (link) DO NOTHING RETURNING id`. Wszystkie zapytania mają parametry `%s`, bez f-stringów w SQL.
+
+## API (FastAPI)
+
+Uruchomienie (potrzebna baza z `DATABASE_URL`):
+
+```powershell
+uvicorn app.api:app --reload
+```
+
+Dokumentacja z przyciskami do testowania: <http://127.0.0.1:8000/docs>
+
+| Metoda | Adres | Co robi |
+|---|---|---|
+| `POST` | `/szukaj` | uruchamia szukanie w tle i od razu zwraca `202` z `id` (płatne - klucz z nagłówka `X-Api-Key`) |
+| `GET` | `/szukaj/{id}` | postęp: status, runda, liczba ofert, koszt (`404`, gdy nie ma) |
+| `GET` | `/oferty` | oferty z bazy, filtry: `?pasuje=PASUJE`, `?aplikowano=true`, `?szukanie_id=3`, `?limit=50` |
+| `GET` | `/oferty/{id}` | jedna oferta (`404`, gdy nie ma) |
+| `POST` / `DELETE` | `/oferty/{id}/aplikuj` | zaznacza / cofa „wysłałem CV” - CV wysyłam sam, agent niczego nie wysyła |
+| `GET` | `/kategorie` | lista kategorii do formularza |
+
+Klucz API (każdy używa swojego):
+
+- przychodzi w nagłówku `X-Api-Key`, a nie w adresie (adresy trafiają do logów),
+- nie zapisuję go w bazie, logach ani odpowiedziach - żyje w pamięci tylko do końca szukania,
+- przed startem sprawdzam go darmowym zapytaniem do Models API, więc zły klucz daje `401` od razu,
+- bez nagłówka API bierze mój klucz z `.env` (wygodne lokalnie); przed wystawieniem do internetu ustawiam `API_KLUCZ_SERWERA=false`.
+
+Inne zabezpieczenia: naraz idą maks. `API_MAKS_SZUKAN` szukań (kolejne dostają `429`), budżet jednego szukania jest ograniczony przez `BUDZET_MAX_USD`, a złe dane formularza dają `422`. Gdy baza nie działa, API odpowiada `503` zamiast się wywracać.
+
+Przykład z PowerShella (lokalnie, bez nagłówka = mój klucz z `.env`; z cudzym kluczem dodaj `-Headers @{ "X-Api-Key" = "sk-ant-..." }`).
+Polskie znaki w kryteriach lepiej wpisywać na `/docs`, bo stary PowerShell 5.1 potrafi je zepsuć:
+
+```powershell
+$body = @{ kategoria="logistyka"; stanowisko="magazynier"; miasto="Legnica"; zdalnie=$false } | ConvertTo-Json
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/szukaj -Body $body -ContentType "application/json; charset=utf-8"
+Invoke-RestMethod http://127.0.0.1:8000/szukaj/1
+Invoke-RestMethod "http://127.0.0.1:8000/oferty?pasuje=PASUJE"
+```
 
 ## Koszty
 
