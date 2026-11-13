@@ -1,22 +1,24 @@
-# API agenta (FastAPI). Uruchomienie:  uvicorn app.api:app --reload
-# Dokumentacja z przyciskami do testowania:  http://127.0.0.1:8000/docs
+# API agenta (FastAPI). Uruchomienie:  python -m uvicorn app.api:app --reload
+# Strona:  http://127.0.0.1:8000/   Dokumentacja z przyciskami do testowania:  http://127.0.0.1:8000/docs
 #
 # Klucz API użytkownika przychodzi w nagłówku X-Api-Key (nie w adresie - adresy lądują w logach).
 # Nie zapisuję go nigdzie: żyje tylko w pamięci, dopóki trwa szukanie.
 
 import datetime
+import io
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal, Optional
 
 import anthropic
 import psycopg
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from . import baza, zadania
 from .agent import Przebieg
-from .config import ustawienia
+from .config import KATALOG_PROJEKTU, ustawienia
+from .eksport import zapisz_ods
 from .modele import KryteriaSzukania
 from .portale import KATEGORIE
 
@@ -172,12 +174,31 @@ def status_szukania(szukanie_id: int):
 
 # ---------- oferty ----------
 
+def _filtry_ofert(pasuje: Optional[Literal["PASUJE", "NIE PASUJE", "DO SPRAWDZENIA"]] = None,
+                  szukanie_id: Optional[int] = None,
+                  aplikowano: Optional[bool] = Query(None, description="true = tylko te, gdzie wysłałem CV"),
+                  limit: int = Query(100, ge=1, le=500)):
+    # te same filtry dla tabeli (JSON) i dla pliku .ods
+    return dict(pasuje=pasuje, szukanie_id=szukanie_id, aplikowano=aplikowano, limit=limit)
+
+
+@app.get("/oferty.ods", summary="Oferty jako arkusz .ods (te same filtry co /oferty)")
+def oferty_ods(filtry: Annotated[dict, Depends(_filtry_ofert)]):
+    wiersze = baza.lista_ofert(url_bazy(), **filtry)
+    # w arkuszu kolumna "Data dodania" to data z ogłoszenia, tak jak w wersji z konsoli
+    do_arkusza = [{**w, "data_dodania": w["data_publikacji"],
+                   "status": "CV wysłane" if w["aplikowano"] else w["status"]} for w in wiersze]
+    plik = io.BytesIO()   # zapisuję do pamięci, bez pliku na dysku serwera
+    zapisz_ods(do_arkusza, plik, [("Liczba ofert", len(wiersze)),
+                                  ("Wygenerowano", datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))])
+    nazwa = f"oferty_{datetime.date.today().isoformat()}.ods"
+    return Response(plik.getvalue(), media_type="application/vnd.oasis.opendocument.spreadsheet",
+                    headers={"Content-Disposition": f'attachment; filename="{nazwa}"'})
+
+
 @app.get("/oferty", response_model=list[OfertaZBazy], summary="Oferty z bazy (darmowe)")
-def oferty(pasuje: Optional[Literal["PASUJE", "NIE PASUJE", "DO SPRAWDZENIA"]] = None,
-           szukanie_id: Optional[int] = None,
-           aplikowano: Optional[bool] = Query(None, description="true = tylko te, gdzie wysłałem CV"),
-           limit: int = Query(100, ge=1, le=500)):
-    return baza.lista_ofert(url_bazy(), pasuje=pasuje, szukanie_id=szukanie_id, aplikowano=aplikowano, limit=limit)
+def oferty(filtry: Annotated[dict, Depends(_filtry_ofert)]):
+    return baza.lista_ofert(url_bazy(), **filtry)
 
 
 @app.get("/oferty/{oferta_id}", response_model=OfertaZBazy, summary="Jedna oferta")
@@ -208,3 +229,20 @@ def cofnij_aplikuj(oferta_id: int):
 @app.get("/kategorie", summary="Lista kategorii do formularza")
 def kategorie():
     return KATEGORIE
+
+
+@app.get("/info", summary="Ustawienia potrzebne stronie")
+def info():
+    # strona po tym wie, czy pole na klucz jest wymagane. Samego klucza oczywiście nie zwracam
+    return {"klucz_serwera": bool(ustawienia.api_klucz_serwera and ustawienia.anthropic_api_key),
+            "model": ustawienia.claude_model, "budzet_max_usd": ustawienia.budzet_max_usd}
+
+
+# ---------- strona ----------
+
+STRONA = KATALOG_PROJEKTU / "static" / "index.html"
+
+
+@app.get("/", include_in_schema=False)
+def strona():
+    return FileResponse(STRONA, media_type="text/html; charset=utf-8")
