@@ -1,0 +1,4 @@
+# biblioteki tylko do testów (pip install -r requirements-dev.txt)
+-r requirements.txt
+pytest>=8
+httpx>=0.27   # potrzebne FastAPI do TestClient
