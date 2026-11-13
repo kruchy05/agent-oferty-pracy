@@ -1,19 +1,53 @@
 # Agent AI do szukania ofert pracy
 
-Agent w Pythonie, który sam przeszukuje portale z ofertami pracy i zbiera oferty dopasowane do podanej kategorii, stanowiska i kwalifikacji. Zaczynałem od szukania ofert dla siebie (junior IT / AI), a teraz działa dla dowolnej branży, np. magazyn, biuro, sprzedaż.
+Agent w Pythonie, który sam przegląda portale z ofertami pracy i zbiera oferty dopasowane do podanej kategorii, stanowiska i kwalifikacji. Do każdej oferty wypisuje, co kandydat spełnia, czego mu brakuje, i ocenia, czy oferta pasuje. Zaczynałem od szukania ofert dla siebie (junior IT / AI), a teraz działa dla dowolnej branży, np. magazyn, biuro, sprzedaż.
 
-Zrobiłem go w ramach nauki budowania aplikacji z AI: wywołania API modelu językowego, własne narzędzia (tool use), structured outputs z Pydantic, kontrola kosztów i bezpieczeństwo agenta.
+Zrobiłem go w ramach nauki budowania aplikacji z AI: wywołania API modelu językowego, własne narzędzia (tool use), structured outputs z Pydantic, kontrola kosztów, bezpieczeństwo agenta, baza danych, API i prosta strona.
 
-## Co robi
+![Strona agenta: formularz, postęp szukania i tabela ofert](docs/strona.png)
+
+<sub>Zrzut z danymi przykładowymi (wymyślone firmy).</sub>
+
+## Co umie
 
 - szuka ofert w wybranej kategorii (IT, logistyka, sprzedaż, administracja i inne) na portalach dobranych do tej kategorii
 - czyta strony z ofertami **na żywo**, a nie tylko wyniki wyszukiwarki, więc dane są świeże
 - bierze tylko oferty pasujące do doświadczenia kandydata i jego lokalizacji (miasto i okolice albo zdalnie)
-- porównuje wymagania z kwalifikacjami kandydata: wypisuje, co spełnia, czego brakuje, i ocenia dopasowanie (PASUJE / NIE PASUJE / DO SPRAWDZENIA)
+- porównuje wymagania z kwalifikacjami kandydata: co spełnia, czego brakuje, ocena PASUJE / DO SPRAWDZENIA (oferty, które nie pasują, odrzuca)
 - odrzuca oferty starsze niż 2 miesiące oraz wygasłe i zarchiwizowane
 - pilnuje budżetu: sam kończy, gdy dojdzie do limitu kosztów
-- pamięta oferty z poprzednich uruchomień, więc pokazuje tylko nowe
-- zapisuje wyniki do bazy **PostgreSQL** (bez duplikatów) oraz do `.ods` (arkusze **Oferty** i **Koszty**) i `.json`
+- pamięta oferty z poprzednich szukań, więc pokazuje tylko nowe
+- zapisuje wyniki do **PostgreSQL** (bez duplikatów), a na żądanie do `.ods` i `.json`
+- ma **stronę www** (każdy wpisuje swój klucz API), **API w FastAPI** i wersję **z konsoli**
+- CV wysyłam sam: przycisk „Wysłałem CV” tylko zapisuje datę, agent niczego nie wysyła
+
+## Technologie
+
+Python 3.10+ · [Claude API](https://platform.claude.com) (Haiku, tool use, web search, structured outputs, prompt caching) · Pydantic + pydantic-settings · FastAPI + Uvicorn · PostgreSQL (psycopg 3) w Dockerze · HTML / CSS / JS bez bibliotek
+
+```mermaid
+flowchart LR
+    U[Strona www] -->|kryteria + klucz API| A[FastAPI]
+    A -->|szukanie w tle| P[Przebieg agenta]
+    P -->|strony startowe| W[(Portale z ofertami)]
+    P -->|krok 1: szukaj i czytaj<br>krok 2: uporządkuj| C[Claude API]
+    C -.->|pobierz_strone<br>wykonuje mój kod| W
+    P -->|krok 3: poziom, data, czy link żyje| W
+    P -->|oferty, odrzucone, koszty| D[(PostgreSQL)]
+    A -->|oferty, .ods| U
+```
+
+## Wyniki z moich uruchomień
+
+Szukanie magazyniera w Legnicy (model Haiku) w kolejnych wersjach agenta:
+
+| Wersja | Co zmieniłem | Wynik |
+|---|---|---|
+| szukanie przez `web_search` | model sam szuka i czyta strony | 11 ofert za 0,10 $, ok. 477 tys. tokenów wejścia |
+| + cache promptu, dynamic filtering | historia w pętli narzędzi z cache (0,1× ceny) | 6 ofert za 0,10 $: koszt wejścia o połowę niższy, ale nadal 6 płatnych wyszukiwań |
+| + strony startowe | Python sam pobiera listę ofert z pracuj.pl, zanim zapyta model | w pierwszej rundzie 6 ofert za ok. 0,012 $, **bez płatnego wyszukiwania** |
+
+Liczba ofert zależy głównie od tego, ile ich jest: dla magazyniera w Legnicy na portalach było kilka nowych ofert, a reszta to produkcja. Szersze stanowisko (np. `magazynier / pracownik produkcji`) daje więcej wyników.
 
 ## Jak to działa
 
@@ -76,6 +110,7 @@ agent-oferty-pracy/
 │   ├── api.py         # API w FastAPI (szukanie w tle, oferty, „wysłałem CV”)
 │   ├── zadania.py     # trwające szukania w pamięci + limit szukań naraz
 │   └── eksport.py     # zapis do .ods i .json
+├── docs/              # zrzuty ekranu do README
 ├── static/
 │   └── index.html     # strona: formularz, postęp szukania, tabela ofert (czysty JS)
 ├── szukaj.py          # uruchomienie z konsoli
@@ -179,6 +214,10 @@ python -m uvicorn app.api:app --reload
 
 - strona: <http://127.0.0.1:8000/> - formularz (klucz API, kategoria, stanowisko, kwalifikacje, doświadczenie, miasto, praca zdalna, budżet), pasek postępu i tabela ofert z tym, co spełniam i czego mi brakuje, przyciskiem „Wysłałem CV” i pobieraniem `.ods`
 - dokumentacja API z przyciskami do testowania: <http://127.0.0.1:8000/docs>
+
+| Ciemny motyw | Telefon | Dokumentacja API (`/docs`) |
+|---|---|---|
+| ![Ciemny motyw](docs/strona_ciemna.png) | ![Telefon](docs/telefon.png) | ![Swagger](docs/api_docs.png) |
 
 Strona to jeden plik bez bibliotek. Dane ofert pochodzą z obcych stron, więc wstawiam je tylko jako tekst (`textContent`, nigdy `innerHTML`), a linki przepuszczam tylko `http(s)` - spreparowana oferta nie uruchomi skryptu.
 
