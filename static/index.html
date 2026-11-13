@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent ofert pracy</title>
+<style>
+  /* kolory jako zmienne, żeby ciemny motyw był jednym blokiem niżej */
+  :root {
+    --tlo: #f4f5f7; --karta: #ffffff; --tekst: #1d2330; --szary: #5d6677; --linia: #dde1e8;
+    --akcent: #2457d6; --akcent-tekst: #ffffff; --pole: #ffffff;
+    --ok: #17803d; --ok-tlo: #e3f4e9; --uwaga: #9a6200; --uwaga-tlo: #fdf1dc; --zle: #b42318; --zle-tlo: #fde7e5;
+    --cien: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --tlo: #12151b; --karta: #1b2029; --tekst: #e6e9ef; --szary: #9aa3b2; --linia: #2d3442;
+      --akcent: #6b93ff; --akcent-tekst: #0d1220; --pole: #12151b;
+      --ok: #5fd08a; --ok-tlo: #173324; --uwaga: #f0b75a; --uwaga-tlo: #3a2c12; --zle: #ff8a80; --zle-tlo: #3d1a18;
+      --cien: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--tlo); color: var(--tekst);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .strona { max-width: 1320px; margin: 0 auto; padding: 24px 16px 48px; }
+  header h1 { margin: 0 0 4px; font-size: 26px; }
+  header p { margin: 0 0 20px; color: var(--szary); }
+  .uklad { display: grid; grid-template-columns: 340px 1fr; gap: 20px; align-items: start; }
+  .uklad > * { min-width: 0; }   /* bez tego szeroka tabela rozpycha stronę na telefonie */
+  @media (max-width: 900px) { .uklad { grid-template-columns: 1fr; } }
+  .karta { background: var(--karta); border: 1px solid var(--linia); border-radius: 12px; padding: 18px; box-shadow: var(--cien); }
+  .karta h2 { margin: 0 0 14px; font-size: 17px; }
+  label { display: block; font-weight: 600; font-size: 13px; margin: 12px 0 4px; }
+  label small { font-weight: 400; color: var(--szary); }
+  input, select, textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--linia); border-radius: 8px;
+                            background: var(--pole); color: var(--tekst); font: inherit; }
+  textarea { resize: vertical; min-height: 64px; }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--akcent); outline-offset: -1px; }
+  .rzad { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .check { display: flex; gap: 8px; align-items: center; font-weight: 400; margin-top: 14px; }
+  .check input { width: auto; }
+  button, .przycisk { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 14px;
+           border-radius: 8px; border: 1px solid var(--akcent); background: var(--akcent); color: var(--akcent-tekst);
+           font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.drugi, .przycisk.drugi { background: transparent; color: var(--akcent); }
+  button.maly { padding: 4px 9px; font-size: 13px; font-weight: 500; }
+  button.wyslane { background: var(--ok-tlo); color: var(--ok); border-color: var(--ok); }
+  #szukaj-btn { width: 100%; margin-top: 18px; }
+  .info { font-size: 13px; color: var(--szary); margin: 6px 0 0; }
+  .komunikat { margin-top: 12px; padding: 10px 12px; border-radius: 8px; font-size: 14px; display: none; }
+  .komunikat.blad { display: block; background: var(--zle-tlo); color: var(--zle); }
+  .komunikat.ok { display: block; background: var(--ok-tlo); color: var(--ok); }
+
+  #postep { display: none; margin-bottom: 20px; }
+  .pasek { height: 8px; background: var(--linia); border-radius: 99px; overflow: hidden; margin: 10px 0; }
+  .pasek div { height: 100%; width: 0; background: var(--akcent); transition: width .4s; }
+  .liczby { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .liczby div { background: var(--tlo); border-radius: 8px; padding: 8px 10px; }
+  .liczby b { display: block; font-size: 18px; }
+  .liczby span { font-size: 12px; color: var(--szary); }
+  @media (max-width: 500px) { .liczby { grid-template-columns: 1fr 1fr; } }
+
+  .filtry { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 14px; }
+  .filtry label { margin: 0 0 4px; }
+  .filtry > div { min-width: 150px; }
+  .filtry > .odstep { flex: 1; min-width: 0; }
+  .tabela { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: var(--szary);
+       padding: 8px 6px; border-bottom: 1px solid var(--linia); white-space: nowrap; }
+  td { padding: 10px 6px; border-bottom: 1px solid var(--linia); vertical-align: top; }
+  td .firma { color: var(--szary); font-size: 13px; }
+  td.oferta { min-width: 170px; }
+  td.wymagania { min-width: 130px; max-width: 220px; }
+  td ul { margin: 0; padding-left: 16px; }
+  td.waska { white-space: nowrap; }
+  .znacznik { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .znacznik.PASUJE { background: var(--ok-tlo); color: var(--ok); }
+  .znacznik.NIE { background: var(--zle-tlo); color: var(--zle); }
+  .znacznik.DO { background: var(--uwaga-tlo); color: var(--uwaga); }
+  .pusto { text-align: center; color: var(--szary); padding: 28px 8px; }
+  a { color: var(--akcent); }
+  footer { margin-top: 24px; font-size: 13px; color: var(--szary); }
+</style>
+</head>
+<body>
+<div class="strona">
+  <header>
+    <h1>Agent ofert pracy</h1>
+    <p>Wpisz, czego szukasz - agent przejrzy portale z ofertami i oceni, które pasują do Twoich kwalifikacji.</p>
+  </header>
+
+  <div class="uklad">
+    <!-- ===== formularz ===== -->
+    <form id="formularz" class="karta" autocomplete="on">
+      <h2>Czego szukasz?</h2>
+
+      <label for="klucz">Klucz Anthropic API <small id="klucz-opis">(sk-ant-...)</small></label>
+      <input id="klucz" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-...">
+      <p class="info">Klucz idzie tylko do tego serwera i dalej do Anthropic. Nie jest nigdzie zapisywany.</p>
+
+      <label for="kategoria">Kategoria</label>
+      <select id="kategoria" required></select>
+
+      <label for="stanowisko">Stanowisko</label>
+      <input id="stanowisko" required minlength="2" maxlength="200" placeholder="np. magazynier / kierowca wózka">
+
+      <label for="kwalifikacje">Twoje kwalifikacje <small>(opcjonalnie)</small></label>
+      <textarea id="kwalifikacje" maxlength="1000" placeholder="np. prawo jazdy B, uprawnienia UDT, angielski B1"></textarea>
+
+      <label for="doswiadczenie">Doświadczenie</label>
+      <select id="doswiadczenie">
+        <option value="bez_doswiadczenia">bez doświadczenia</option>
+        <option value="do_2_lat" selected>do 2 lat</option>
+        <option value="2_5_lat">2-5 lat</option>
+        <option value="5_plus">ponad 5 lat</option>
+      </select>
+
+      <div class="rzad">
+        <div>
+          <label for="miasto">Miasto</label>
+          <input id="miasto" maxlength="100" placeholder="np. Wrocław">
+        </div>
+        <div>
+          <label for="budzet">Budżet <small>($)</small></label>
+          <input id="budzet" type="number" min="0.01" max="1" step="0.01" value="0.15" required>
+        </div>
+      </div>
+
+      <label class="check"><input id="zdalnie" type="checkbox" checked> szukaj też pracy zdalnej</label>
+
+      <button id="szukaj-btn" type="submit">Szukaj ofert</button>
+      <p class="info" id="koszt-info">Jedno szukanie to zwykle kilka centów. Nie przekroczy budżetu.</p>
+      <div id="komunikat" class="komunikat" role="alert"></div>
+    </form>
+
+    <div>
+      <!-- ===== postęp ===== -->
+      <section id="postep" class="karta" aria-live="polite">
+        <h2 id="postep-tytul">Szukam…</h2>
+        <div class="pasek"><div id="pasek-koszt"></div></div>
+        <div class="liczby">
+          <div><b id="p-runda">0</b><span>runda</span></div>
+          <div><b id="p-oferty">0</b><span>dobrych ofert</span></div>
+          <div><b id="p-koszt">0 $</b><span id="p-budzet">z budżetu</span></div>
+          <div><b id="p-strony">0</b><span>przeczytanych stron</span></div>
+        </div>
+        <p class="info" id="p-opis">Pasek pokazuje, ile budżetu zużyto. Możesz zamknąć stronę - wyniki trafią do bazy.</p>
+      </section>
+
+      <!-- ===== oferty ===== -->
+      <section class="karta">
+        <h2>Oferty</h2>
+        <div class="filtry">
+          <div>
+            <label for="f-pasuje">Dopasowanie</label>
+            <select id="f-pasuje">
+              <option value="">wszystkie</option>
+              <option value="PASUJE">pasuje</option>
+              <option value="DO SPRAWDZENIA">do sprawdzenia</option>
+            </select>
+          </div>
+          <div>
+            <label for="f-cv">CV</label>
+            <select id="f-cv">
+              <option value="">wszystkie</option>
+              <option value="false">jeszcze nie wysłane</option>
+              <option value="true">wysłane</option>
+            </select>
+          </div>
+          <div>
+            <label for="f-szukanie">Z szukania</label>
+            <select id="f-szukanie"><option value="">wszystkich</option></select>
+          </div>
+          <div class="odstep"></div>
+          <a id="pobierz-ods" class="przycisk drugi" href="/oferty.ods">Pobierz .ods</a>
+        </div>
+        <div class="tabela">
+          <table>
+            <thead><tr>
+              <th>Oferta</th><th>Płaca</th><th>Dopasowanie</th>
+              <th>Spełniam</th><th>Brakuje mi</th><th>Dodano</th><th></th>
+            </tr></thead>
+            <tbody id="oferty"><tr><td colspan="7" class="pusto">Wczytuję…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <footer>CV wysyłasz sam - przycisk „Wysłałem CV” tylko zapisuje, że to zrobiłeś. Agent niczego nie wysyła.</footer>
+</div>
+
+<script>
+// Cała strona to zwykły JS bez bibliotek. Rozmawia z API z tego samego serwera.
+// Dane ofert pochodzą z obcych stron, więc wstawiam je TYLKO przez textContent (nigdy innerHTML).
+
+const $ = (id) => document.getElementById(id);
+let odpytywanie = null;   // timer sprawdzania postępu
+let szukanieId = null;
+
+// --- pomocnicze ---
+
+function pokaz(tekst, rodzaj) {
+  const k = $("komunikat");
+  k.textContent = tekst;
+  k.className = "komunikat " + (rodzaj || "");
+}
+
+// FastAPI zwraca błąd jako {detail: "tekst"} albo przy 422 jako listę błędów pól
+function opisBledu(dane, status) {
+  const d = dane && dane.detail;
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) return d.map((b) => `${(b.loc || []).slice(-1)[0]}: ${b.msg}`).join("; ");
+  return `Błąd serwera (${status})`;
+}
+
+async function api(adres, opcje = {}) {
+  const r = await fetch(adres, opcje);
+  const dane = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(opisBledu(dane, r.status));
+  return dane;
+}
+
+function el(tag, tekst, klasa) {
+  const e = document.createElement(tag);
+  if (tekst !== undefined && tekst !== null) e.textContent = tekst;
+  if (klasa) e.className = klasa;
+  return e;
+}
+
+function bezpiecznyLink(url) {
+  try {
+    const u = new URL(url);
+    return (u.protocol === "https:" || u.protocol === "http:") ? u.href : null;
+  } catch { return null; }
+}
+
+function lista(elementy) {
+  if (!elementy || !elementy.length) return el("span", "-", "firma");
+  const ul = el("ul");
+  elementy.forEach((x) => ul.appendChild(el("li", x)));
+  return ul;
+}
+
+// --- start strony ---
+
+async function start() {
+  try {
+    const [kategorie, info] = await Promise.all([api("/kategorie"), api("/info")]);
+    const s = $("kategoria");
+    for (const [klucz, nazwa] of Object.entries(kategorie)) s.appendChild(new Option(nazwa, klucz));
+    $("budzet").max = info.budzet_max_usd;
+    if (info.klucz_serwera) {
+      $("klucz-opis").textContent = "(opcjonalnie - serwer ma swój klucz)";
+    } else {
+      $("klucz").required = true;
+    }
+  } catch (e) {
+    pokaz("Nie udało się połączyć z serwerem: " + e.message, "blad");
+  }
+  await wczytajOferty();
+}
+
+// --- szukanie ---
+
+$("formularz").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  pokaz("");
+  const kryteria = {
+    kategoria: $("kategoria").value,
+    stanowisko: $("stanowisko").value.trim(),
+    kwalifikacje: $("kwalifikacje").value.trim(),
+    doswiadczenie: $("doswiadczenie").value,
+    miasto: $("miasto").value.trim(),
+    zdalnie: $("zdalnie").checked,
+    budzet_usd: Number($("budzet").value),
+  };
+  const naglowki = { "Content-Type": "application/json" };
+  const klucz = $("klucz").value.trim();
+  if (klucz) naglowki["X-Api-Key"] = klucz;
+
+  $("szukaj-btn").disabled = true;
+  $("szukaj-btn").textContent = "Sprawdzam klucz…";
+  try {
+    const odp = await api("/szukaj", { method: "POST", headers: naglowki, body: JSON.stringify(kryteria) });
+    szukanieId = odp.id;
+    $("postep").style.display = "block";
+    $("postep-tytul").textContent = `Szukam: ${kryteria.stanowisko}`;
+    $("szukaj-btn").textContent = "Szukam…";
+    sprawdzPostep();
+    odpytywanie = setInterval(sprawdzPostep, 3000);
+  } catch (e) {
+    pokaz(e.message, "blad");
+    $("szukaj-btn").disabled = false;
+    $("szukaj-btn").textContent = "Szukaj ofert";
+  }
+});
+
+async function sprawdzPostep() {
+  let s;
+  try { s = await api(`/szukaj/${szukanieId}`); }
+  catch (e) { return; }   // chwilowy błąd sieci - spróbuję przy następnym tyknięciu
+
+  $("p-runda").textContent = s.runda;
+  $("p-oferty").textContent = s.liczba_ofert;
+  $("p-koszt").textContent = s.koszt_usd.toFixed(3) + " $";
+  $("p-budzet").textContent = s.budzet_usd ? `z ${s.budzet_usd} $ budżetu` : "koszt";
+  $("p-strony").textContent = s.pobrania;
+  const procent = s.budzet_usd ? Math.min(100, (s.koszt_usd / s.budzet_usd) * 100) : 0;
+  $("pasek-koszt").style.width = procent + "%";
+
+  if (s.status === "trwa") return;
+
+  clearInterval(odpytywanie);
+  $("szukaj-btn").disabled = false;
+  $("szukaj-btn").textContent = "Szukaj ofert";
+  const opisy = {
+    gotowe: `Gotowe: ${s.liczba_ofert} nowych ofert za ${s.koszt_usd.toFixed(3)} $.`,
+    budzet: `Skończył się budżet - zapisałem ${s.liczba_ofert} ofert. Zwiększ budżet, jeśli chcesz więcej.`,
+    blad: `Błąd: ${s.blad || "nieznany"}. Zapisałem to, co udało się znaleźć (${s.liczba_ofert}).`,
+    przerwane: "Szukanie zostało przerwane (serwer był wyłączony).",
+  };
+  $("postep-tytul").textContent = s.status === "gotowe" ? "Gotowe" : "Koniec szukania";
+  $("p-opis").textContent = opisy[s.status] || s.status;
+  pokaz(opisy[s.status] || s.status, s.status === "gotowe" ? "ok" : "blad");
+
+  // pokazuję od razu wyniki tego szukania
+  dodajSzukanieDoFiltra(szukanieId);
+  $("f-szukanie").value = String(szukanieId);
+  await wczytajOferty();
+}
+
+// --- tabela ofert ---
+
+function filtry() {
+  const p = new URLSearchParams();
+  if ($("f-pasuje").value) p.set("pasuje", $("f-pasuje").value);
+  if ($("f-cv").value) p.set("aplikowano", $("f-cv").value);
+  if ($("f-szukanie").value) p.set("szukanie_id", $("f-szukanie").value);
+  return p;
+}
+
+function dodajSzukanieDoFiltra(id) {
+  const s = $("f-szukanie");
+  if (![...s.options].some((o) => o.value === String(id))) s.appendChild(new Option(`nr ${id}`, String(id)));
+}
+
+async function wczytajOferty() {
+  const p = filtry();
+  $("pobierz-ods").href = "/oferty.ods" + (p.toString() ? "?" + p : "");
+  const tbody = $("oferty");
+  let oferty;
+  try {
+    oferty = await api("/oferty?" + p);
+  } catch (e) {
+    tbody.replaceChildren(wierszPusty("Nie udało się wczytać ofert: " + e.message));
+    return;
+  }
+  // numery szukań do filtra, żeby można było wrócić do starszych wyników
+  oferty.forEach((o) => o.szukanie_id && dodajSzukanieDoFiltra(o.szukanie_id));
+  if (!oferty.length) {
+    tbody.replaceChildren(wierszPusty("Brak ofert. Uruchom szukanie albo zmień filtry."));
+    return;
+  }
+  tbody.replaceChildren(...oferty.map(wiersz));
+}
+
+function wierszPusty(tekst) {
+  const tr = el("tr");
+  const td = el("td", tekst, "pusto");
+  td.colSpan = 7;
+  tr.appendChild(td);
+  return tr;
+}
+
+function wiersz(o) {
+  const tr = el("tr");
+
+  const tdStan = el("td", null, "oferta");
+  const link = bezpiecznyLink(o.link);
+  const tytul = link ? el("a", o.stanowisko) : el("span", o.stanowisko);
+  if (link) { tytul.href = link; tytul.target = "_blank"; tytul.rel = "noopener noreferrer"; }
+  tdStan.append(tytul, el("div", [o.firma, o.miasto, o.poziom].filter(Boolean).join(" · "), "firma"));
+  tr.appendChild(tdStan);
+
+  tr.appendChild(el("td", o.wynagrodzenie || "-", "waska"));
+
+  const tdPas = el("td");
+  const pas = o.pasuje || "DO SPRAWDZENIA";
+  tdPas.appendChild(el("span", pas.toLowerCase(), "znacznik " + pas.split(" ")[0]));
+  tr.appendChild(tdPas);
+
+  const tdSp = el("td", null, "wymagania"); tdSp.appendChild(lista(o.spelnione_wymagania)); tr.appendChild(tdSp);
+  const tdBr = el("td", null, "wymagania"); tdBr.appendChild(lista(o.brakujace_wymagania)); tr.appendChild(tdBr);
+  tr.appendChild(el("td", o.data_publikacji || "-", "waska"));
+
+  const tdCv = el("td", null, "waska");
+  const btn = el("button", null, "maly");
+  btn.type = "button";
+  ustawPrzyciskCv(btn, o.aplikowano);
+  btn.addEventListener("click", () => przelaczCv(o.id, btn));
+  tdCv.appendChild(btn);
+  tr.appendChild(tdCv);
+  return tr;
+}
+
+function ustawPrzyciskCv(btn, aplikowano) {
+  btn.dataset.wyslane = aplikowano ? "1" : "";
+  btn.textContent = aplikowano ? "✓ CV wysłane" : "Wysłałem CV";
+  btn.className = "maly " + (aplikowano ? "wyslane" : "drugi");
+  btn.title = aplikowano ? `Zaznaczone ${new Date(aplikowano).toLocaleString("pl-PL")} - kliknij, żeby cofnąć` : "";
+}
+
+async function przelaczCv(id, btn) {
+  btn.disabled = true;
+  try {
+    const o = await api(`/oferty/${id}/aplikuj`, { method: btn.dataset.wyslane ? "DELETE" : "POST" });
+    ustawPrzyciskCv(btn, o.aplikowano);
+  } catch (e) {
+    pokaz(e.message, "blad");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+["f-pasuje", "f-cv", "f-szukanie"].forEach((id) => $(id).addEventListener("change", wczytajOferty));
+start();
+</script>
+</body>
+</html>

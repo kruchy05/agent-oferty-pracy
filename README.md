@@ -76,6 +76,8 @@ agent-oferty-pracy/
 │   ├── api.py         # API w FastAPI (szukanie w tle, oferty, „wysłałem CV”)
 │   ├── zadania.py     # trwające szukania w pamięci + limit szukań naraz
 │   └── eksport.py     # zapis do .ods i .json
+├── static/
+│   └── index.html     # strona: formularz, postęp szukania, tabela ofert (czysty JS)
 ├── szukaj.py          # uruchomienie z konsoli
 ├── .env.example       # wzór ustawień (bez sekretów)
 └── requirements.txt
@@ -167,15 +169,18 @@ Kryteria wyszukiwania nie są w kodzie: przychodzą z argumentów (`szukaj.py`),
 
 Zapis bez duplikatów: `INSERT ... ON CONFLICT (link) DO NOTHING RETURNING id`. Wszystkie zapytania mają parametry `%s`, bez f-stringów w SQL.
 
-## API (FastAPI)
+## Strona i API (FastAPI)
 
 Uruchomienie (potrzebna baza z `DATABASE_URL`):
 
 ```powershell
-uvicorn app.api:app --reload
+python -m uvicorn app.api:app --reload
 ```
 
-Dokumentacja z przyciskami do testowania: <http://127.0.0.1:8000/docs>
+- strona: <http://127.0.0.1:8000/> - formularz (klucz API, kategoria, stanowisko, kwalifikacje, doświadczenie, miasto, praca zdalna, budżet), pasek postępu i tabela ofert z tym, co spełniam i czego mi brakuje, przyciskiem „Wysłałem CV” i pobieraniem `.ods`
+- dokumentacja API z przyciskami do testowania: <http://127.0.0.1:8000/docs>
+
+Strona to jeden plik bez bibliotek. Dane ofert pochodzą z obcych stron, więc wstawiam je tylko jako tekst (`textContent`, nigdy `innerHTML`), a linki przepuszczam tylko `http(s)` - spreparowana oferta nie uruchomi skryptu.
 
 | Metoda | Adres | Co robi |
 |---|---|---|
@@ -184,7 +189,8 @@ Dokumentacja z przyciskami do testowania: <http://127.0.0.1:8000/docs>
 | `GET` | `/oferty` | oferty z bazy, filtry: `?pasuje=PASUJE`, `?aplikowano=true`, `?szukanie_id=3`, `?limit=50` |
 | `GET` | `/oferty/{id}` | jedna oferta (`404`, gdy nie ma) |
 | `POST` / `DELETE` | `/oferty/{id}/aplikuj` | zaznacza / cofa „wysłałem CV” - CV wysyłam sam, agent niczego nie wysyła |
-| `GET` | `/kategorie` | lista kategorii do formularza |
+| `GET` | `/oferty.ods` | te same oferty i filtry jako arkusz LibreOffice |
+| `GET` | `/kategorie`, `/info` | lista kategorii i ustawienia dla strony (czy serwer ma swój klucz, maks. budżet) |
 
 Klucz API (każdy używa swojego):
 
