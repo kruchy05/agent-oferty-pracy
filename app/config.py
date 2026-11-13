@@ -46,6 +46,12 @@ class Ustawienia(BaseSettings):
     # "auto" = sprawdź w Models API, czy model to obsługuje; "tak" / "nie" = wymuś
     web_search_dynamiczne: Literal["auto", "tak", "nie"] = "auto"
 
+    # API (FastAPI)
+    api_maks_szukan: int = 2                 # ile płatnych szukań może iść naraz - kolejne dostaną 429
+    # True = gdy ktoś nie poda swojego klucza, API weźmie MÓJ z .env (wygodne lokalnie).
+    # Przed wystawieniem strony do internetu ustawić False, inaczej ktoś obcy szuka na mój koszt
+    api_klucz_serwera: bool = True
+
     # obecne modele nie używają temperatury - ustaw tylko dla starszego modelu
     temperatura_szukanie: Optional[float] = None
     temperatura_porzadkowanie: Optional[float] = None
