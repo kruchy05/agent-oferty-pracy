@@ -1,0 +1,8 @@
+# Git sam pilnuje końców linii: w repozytorium zawsze LF, na Windowsie w plikach jak lubi system.
+# Dockerfile i pliki YAML zawsze LF - czytają je narzędzia z Linuksa
+* text=auto
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.sh text eol=lf
+*.png binary
+*.ods binary

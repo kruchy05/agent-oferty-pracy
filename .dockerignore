@@ -1,0 +1,17 @@
+# tego nie kopiuję do obrazu: sekrety, moje wyniki, śmieci
+.env
+*.key
+.git
+.github
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+docs/
+oferty_*
+widziane_oferty.json
+objasnienie.txt
+Claude outputs/
+README-1.md
+.~lock.*
+~$*

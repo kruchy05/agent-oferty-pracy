@@ -25,7 +25,7 @@ Zrobiłem go w ramach nauki budowania aplikacji z AI: wywołania API modelu jęz
 
 ## Technologie
 
-Python 3.10+ · [Claude API](https://platform.claude.com) (Haiku, tool use, web search, structured outputs, prompt caching) · Pydantic + pydantic-settings · FastAPI + Uvicorn · PostgreSQL (psycopg 3) w Dockerze · HTML / CSS / JS bez bibliotek · pytest + GitHub Actions
+Python 3.10+ · [Claude API](https://platform.claude.com) (Haiku, tool use, web search, structured outputs, prompt caching) · Pydantic + pydantic-settings · FastAPI + Uvicorn · PostgreSQL (psycopg 3) w Dockerze · HTML / CSS / JS bez bibliotek · Docker Compose · pytest + GitHub Actions
 
 ```mermaid
 flowchart LR
@@ -118,6 +118,8 @@ agent-oferty-pracy/
 ├── tests/             # testy pytest (udawany Claude, lokalny portal, baza testowa)
 ├── .github/workflows/ # testy uruchamiane automatycznie na GitHubie
 ├── szukaj.py          # uruchomienie z konsoli
+├── Dockerfile         # obraz aplikacji (API + strona)
+├── docker-compose.yml # aplikacja + baza jedną komendą
 ├── .env.example       # wzór ustawień (bez sekretów)
 └── requirements.txt
 ```
@@ -144,13 +146,13 @@ Potrzebny jest Python 3.10+ i klucz API z [Claude Console](https://platform.clau
 3. (Opcjonalnie) baza PostgreSQL, np. w Dockerze:
 
    ```powershell
-   docker run --name moj-postgres -e POSTGRES_PASSWORD=TWOJE_HASLO -p 5432:5432 -v pgdane:/var/lib/postgresql -d postgres
+   docker run --name moj-postgres -e POSTGRES_PASSWORD=<HASLO> -p 5432:5432 -v pgdane:/var/lib/postgresql -d postgres
    ```
 
    i w `.env`:
 
    ```
-   DATABASE_URL=postgresql://postgres:TWOJE_HASLO@localhost:5432/postgres
+   DATABASE_URL=postgresql://postgres:<HASLO>@localhost:5432/postgres
    ```
 
    Tabele agent tworzy sam przy starcie. Bez `DATABASE_URL` wyniki trafiają tylko do plików.
@@ -177,6 +179,31 @@ Podgląd, co agent „widzi” na danej stronie (darmowe, nie używa API):
 ```powershell
 python -m app.narzedzia https://justjoin.it/job-offers/wroclaw/python
 ```
+
+## Uruchomienie w Dockerze (jedna komenda)
+
+Baza i aplikacja w dwóch kontenerach, bez instalowania Pythona i bibliotek. Potrzebny jest [Docker Desktop](https://www.docker.com/products/docker-desktop/) i plik `.env` z dwiema wartościami:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+POSTGRES_PASSWORD=<HASLO>
+```
+
+```powershell
+docker compose up -d --build
+```
+
+Strona: <http://127.0.0.1:8000/>. Inne przydatne komendy:
+
+```powershell
+docker compose ps            # stan kontenerów (app powinno mieć "healthy")
+docker compose logs -f app   # co robi agent (Ctrl+C kończy podgląd, kontenery działają dalej)
+docker compose down          # zatrzymanie - oferty zostają w wolumenie pgdane-compose
+```
+
+- `DATABASE_URL` z `.env` jest w kontenerze nadpisywany adresem bazy z compose (`db`), więc ten sam `.env` działa i lokalnie, i w Dockerze.
+- Port bazy nie jest wystawiony na zewnątrz, więc nie gryzie się z innym Postgresem na 5432, a strona słucha tylko na `127.0.0.1`.
+- Aplikacja w kontenerze nie działa jako root, a `.env` nie trafia do obrazu (jest w `.dockerignore`).
 
 ## Ustawienia
 
@@ -273,7 +300,7 @@ Testy bazy i API z bazą działają tylko z **osobną bazą testową** (testy ka
 
 ```powershell
 docker exec moj-postgres createdb -U postgres agent_testy
-$env:TEST_DATABASE_URL = "postgresql://postgres:TWOJE_HASLO@localhost:5432/agent_testy"
+$env:TEST_DATABASE_URL = "postgresql://postgres:<HASLO>@localhost:5432/agent_testy"
 python -m pytest
 ```
 

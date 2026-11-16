@@ -1,0 +1,37 @@
+# Całość jedną komendą:  docker compose up -d   ->  http://127.0.0.1:8000/
+# Wymaga w .env:  ANTHROPIC_API_KEY  i  POSTGRES_PASSWORD
+
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Ustaw POSTGRES_PASSWORD w pliku .env}
+      POSTGRES_DB: oferty
+    volumes:
+      - pgdane-compose:/var/lib/postgresql   # dane zostają po docker compose down
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d oferty"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # port bazy NIE jest wystawiony na zewnątrz - aplikacja łączy się po sieci Dockera,
+    # więc nie ma konfliktu z moim kontenerem moj-postgres na 5432
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      # nadpisuje DATABASE_URL z .env (tam jest localhost, a tu baza to kontener "db")
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/oferty
+    ports:
+      - "127.0.0.1:8000:8000"   # strona dostępna tylko z mojego komputera
+    depends_on:
+      db:
+        condition: service_healthy   # API startuje dopiero, gdy baza przyjmuje połączenia
+
+volumes:
+  pgdane-compose:
