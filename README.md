@@ -113,6 +113,7 @@ agent-oferty-pracy/
 │   ├── zadania.py     # trwające szukania w pamięci + limit szukań naraz
 │   ├── tozsamosc.py   # użytkownik = HMAC z klucza API, szyfrowanie zapisanych kluczy
 │   ├── harmonogram.py # automatyczne szukanie co X dni (wątek w tle)
+│   ├── cv.py          # profil zawodowy z CV w PDF (Claude + structured outputs)
 │   ├── powiadomienia.py # Web Push (VAPID)
 │   └── eksport.py     # zapis do .ods i .json
 ├── docs/              # zrzuty ekranu do README
@@ -267,6 +268,7 @@ Strona to jeden plik bez bibliotek. Dane ofert pochodzą z obcych stron, więc w
 | `GET` | `/oferty/{id}` | jedna oferta (`404`, gdy nie ma) |
 | `POST` / `DELETE` | `/oferty/{id}/aplikuj` | zaznacza / cofa „wysłałem CV” - CV wysyłam sam, agent niczego nie wysyła |
 | `GET` | `/oferty.ods` | te same oferty i filtry jako arkusz LibreOffice |
+| `POST` / `GET` / `DELETE` | `/cv` | wczytanie CV (PDF w treści, płatne) / mój profil / usunięcie profilu |
 | `GET` / `PUT` / `DELETE` | `/automat` | stan / włączenie (zapisuje zaszyfrowany klucz) / wyłączenie automatu |
 | `GET` | `/push/klucz` | publiczny klucz VAPID dla przeglądarki |
 | `POST` / `DELETE` | `/push/subskrypcja` | zapis / wypisanie tej przeglądarki z powiadomień |
@@ -303,9 +305,17 @@ Na stronie można włączyć automat: agent sam szuka **co X dni o wybranej godz
 - **Powiadomienia:** Web Push z kluczami VAPID (`pywebpush`), treść szyfrowana dla konkretnej przeglądarki - usługa push (Google, Apple, Mozilla) widzi tylko zaszyfrowane bajty. Wygasłe subskrypcje serwer sam usuwa.
 - Automat działa, dopóki działa serwer - lokalnie tylko przy włączonym `uvicorn`, na serwerze cały czas.
 
+## Dopasowanie do CV
+
+Na stronie „Wczytaj z CV (PDF)”: PDF idzie do Claude jako blok `document`, a wraca profil zawodowy (structured outputs): kwalifikacje, doświadczenie, kategoria, 2-4 proponowane stanowiska. Profil wypełnia formularz, a potem agent porównuje z nim wymagania ofert („spełniam / brakuje mi”).
+
+- **Samo CV nie jest zapisywane** - w bazie zostaje tylko profil (można go usunąć), a model ma polecenie pominąć dane osobowe (imię, kontakt, adres, datę urodzenia).
+- Przed wysłaniem sprawdzam, czy plik to PDF i ma maks. 5 MB (serwer przerywa wczytywanie większych), oraz w Models API, czy model czyta PDF-y - zły plik nic nie kosztuje.
+- Koszt: CV na 1-2 strony to ułamek grosza na Haiku.
+
 ## Testy
 
-66 testów w `tests/`. Nie potrzebują klucza API ani internetu i nic nie kosztują:
+88 testów w `tests/`. Nie potrzebują klucza API ani internetu i nic nie kosztują:
 
 - **Claude jest udawany**: `MockTransport` z SDK odpowiada jak prawdziwe API, a testy sprawdzają też, co agent do niego wysłał (kryteria, zasady bezpieczeństwa, `cache_control`, typ wyszukiwarki),
 - **portal z ofertami** to mały serwer HTTP uruchamiany na czas testów (oferta aktualna, archiwalna, portal blokujący skrypty, ukryte „polecenie” w ogłoszeniu),

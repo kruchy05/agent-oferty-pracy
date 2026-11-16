@@ -136,10 +136,15 @@ def uporzadkuj(zapytanie):
 class UdawanyClaude:
     """Odpowiada jak API Claude. Zapamiętuje zapytania, żeby testy mogły sprawdzić, co agent wysłał."""
 
-    def __init__(self, oferty=(), dynamiczne=False, zly_klucz=None):
+    PROFIL_CV = {"kwalifikacje": "Python, SQL, Git, prawo jazdy B, angielski B2", "doswiadczenie": "do_2_lat",
+                 "kategoria": "it", "stanowiska": ["junior Python developer", "stażysta AI"], "miasto": "Wrocław",
+                 "podsumowanie": "Początkujący programista Pythona z projektami AI."}
+
+    def __init__(self, oferty=(), dynamiczne=False, zly_klucz=None, pdf=True):
         self.oferty = list(oferty)        # bloki tekstu, które "znajdzie" krok 1
         self.dynamiczne = dynamiczne      # czy model "ma" code_execution (dynamic filtering)
         self.zly_klucz = zly_klucz
+        self.pdf = pdf                    # czy model "czyta" PDF (capabilities.pdf_input)
         self.zapytania = []
         self.klucze = []
 
@@ -151,9 +156,14 @@ class UdawanyClaude:
         if req.method == "GET":   # Models API
             return httpx2.Response(200, json={"id": "claude-haiku-5-5", "type": "model", "display_name": "Haiku",
                                               "created_at": "2026-01-01T00:00:00Z", "lifecycle": "active",
-                                              "capabilities": {"code_execution": {"supported": self.dynamiczne}}})
+                                              "capabilities": {"code_execution": {"supported": self.dynamiczne},
+                                                               "pdf_input": {"supported": self.pdf}}})
         zapytanie = json.loads(req.content)
         self.zapytania.append(zapytanie)
+        tresc = zapytanie["messages"][0]["content"]
+        if isinstance(tresc, list) and any(b.get("type") == "document" for b in tresc):   # CV w PDF
+            return httpx2.Response(200, json=wiadomosc([{"type": "text", "text": json.dumps(self.PROFIL_CV)}],
+                                                       input_tokens=3000, output_tokens=200))
         if "output_config" in zapytanie:
             return httpx2.Response(200, json=uporzadkuj(zapytanie))
         return httpx2.Response(200, json=wiadomosc([{"type": "text", "text": "\n---\n".join(self.oferty)}],
@@ -195,7 +205,7 @@ def baza_url(monkeypatch):
     import psycopg
     try:
         with psycopg.connect(url, autocommit=True, connect_timeout=5) as conn:
-            conn.execute("DROP TABLE IF EXISTS oferty, odrzucone, szukania, automaty, subskrypcje_push CASCADE")
+            conn.execute("DROP TABLE IF EXISTS oferty, odrzucone, szukania, automaty, subskrypcje_push, profile CASCADE")
     except psycopg.OperationalError as e:
         # jedna czytelna linia zamiast ekranu błędów (np. złe hasło albo wyłączony Docker)
         pytest.fail(f"Nie mogę połączyć się z bazą testową ({nazwa_bazy}): {str(e).splitlines()[0]}", pytrace=False)

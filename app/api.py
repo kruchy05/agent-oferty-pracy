@@ -16,13 +16,14 @@ import psycopg
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, HttpUrl
 
-from . import baza, harmonogram, powiadomienia, zadania
+from . import baza, cv, harmonogram, powiadomienia, zadania
 from .agent import Przebieg
 from .config import KATALOG_PROJEKTU, ustawienia
 from .eksport import zapisz_ods
-from .modele import KryteriaSzukania
+from .modele import KryteriaSzukania, ProfilCV
 from .portale import KATEGORIE
 from .tozsamosc import id_uzytkownika, zaszyfruj
 
@@ -370,6 +371,48 @@ def test_push(ja: Ja):
     if not ile:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Nie mam żadnego Twojego urządzenia z włączonymi powiadomieniami.")
     return {"wyslano": ile}
+
+
+# ---------- profil z CV ----------
+
+class WynikCV(BaseModel):
+    profil: ProfilCV
+    koszt_usd: float
+
+
+@app.post("/cv", response_model=WynikCV, summary="Wczytaj CV (PDF w treści zapytania) - płatne, ok. 0,01 $",
+          openapi_extra={"requestBody": {"content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}}}})
+async def wczytaj_cv(request: Request, ja: Ja):
+    # PDF przychodzi jako surowe bajty (Content-Type: application/pdf) - bez dodatkowej biblioteki do formularzy.
+    # Czytam kawałkami i przerywam po 5 MB, żeby nikt nie zapchał pamięci serwera wielkim plikiem
+    dane = bytearray()
+    async for kawalek in request.stream():
+        dane += kawalek
+        if len(dane) > cv.MAKS_ROZMIAR_CV:
+            raise HTTPException(413, "Plik jest za duży (maks. 5 MB).")   # liczba - nazwa stałej różni się między wersjami Starlette
+    url = url_bazy()
+    klient = nowy_klient(ja.klucz)
+    try:
+        # rozmowa z Claude trwa kilka sekund - w osobnym wątku, żeby nie blokować innych zapytań
+        profil, koszt = await run_in_threadpool(cv.analizuj_cv, klient, bytes(dane))
+    except cv.BladCV as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    except anthropic.AuthenticationError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Klucz API jest nieprawidłowy albo został wyłączony.")
+    except anthropic.APIError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Anthropic API: {type(e).__name__}")
+    baza.zapisz_profil(url, ja.id, profil.model_dump())   # samo CV nie jest nigdzie zapisywane
+    return WynikCV(profil=profil, koszt_usd=round(koszt, 4))
+
+
+@app.get("/cv", response_model=Optional[ProfilCV], summary="Mój zapisany profil z CV (null = brak)")
+def moj_profil(ja: Ja):
+    return baza.profil(url_bazy(), ja.id)
+
+
+@app.delete("/cv", status_code=status.HTTP_204_NO_CONTENT, summary="Usuń mój profil z CV")
+def usun_profil(ja: Ja):
+    baza.usun_profil(url_bazy(), ja.id)
 
 
 @app.get("/kategorie", summary="Lista kategorii do formularza")

@@ -53,3 +53,15 @@ class Oferta(BaseModel):
 
 class ListaOfert(BaseModel):
     oferty: list[Oferta]
+
+
+class ProfilCV(BaseModel):
+    """Profil zawodowy wyciągnięty z CV (structured outputs). Celowo BEZ danych osobowych -
+    nie ma tu imienia, nazwiska, kontaktu, adresu ani daty urodzenia."""
+    kwalifikacje: str = Field(description="Umiejętności, uprawnienia, certyfikaty, języki - po przecinku, "
+                                          "krótko, po polsku, maks. ok. 600 znaków")
+    doswiadczenie: Doswiadczenie = Field(description="Łączne doświadczenie zawodowe (staże i praktyki liczą się częściowo)")
+    kategoria: Literal[tuple(KATEGORIE)] = Field(description="Kategoria, do której kandydat najlepiej pasuje")
+    stanowiska: list[str] = Field(description="2-4 stanowiska, na które kandydat realnie ma szanse, po polsku")
+    miasto: Optional[str] = Field(None, description="Tylko miasto zamieszkania, jeśli CV je podaje (bez ulicy)")
+    podsumowanie: str = Field(description="1-2 zdania o profilu zawodowym, bez danych osobowych")
