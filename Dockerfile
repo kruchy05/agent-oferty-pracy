@@ -17,7 +17,7 @@ COPY static ./static
 COPY szukaj.py .
 
 # aplikacja nie działa jako root - na wypadek, gdyby ktoś znalazł w niej dziurę
-RUN useradd --create-home agent
+RUN useradd --create-home agent && mkdir dane && chown agent dane
 USER agent
 
 EXPOSE 8000

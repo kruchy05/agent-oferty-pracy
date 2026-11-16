@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import anthropic
 import httpx2
 import pytest
+from pydantic import SecretStr
 
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")   # lokalny portal bez proxy
 
@@ -79,7 +80,10 @@ def ustawienia_testowe(monkeypatch, tmp_path):
     # .env z mojego komputera nie może wpływać na testy (np. prawdziwy DATABASE_URL)
     for nazwa, wartosc in {"database_url": None, "anthropic_api_key": None, "max_rund": 1,
                            "max_stron_startowych": 0, "web_search_dynamiczne": "auto",
-                           "api_klucz_serwera": True, "api_maks_szukan": 2, "budzet_max_usd": 1.0}.items():
+                           "api_klucz_serwera": True, "api_maks_szukan": 2, "budzet_max_usd": 1.0,
+                           "api_limit_dzienny": 10,
+                           # stały sekret - testy nie mogą tworzyć dane/sekret.key w moim folderze
+                           "sekret_serwera": SecretStr("sekret-do-testow")}.items():
         monkeypatch.setattr(ustawienia, nazwa, wartosc)
     # lokalny portal jako dozwolony portal, jedna grupa = wszystkie portale w jednej rundzie
     monkeypatch.setattr(PO, "PORTALE_OGOLNE", ["127.0.0.1"] + PO.PORTALE_OGOLNE)
@@ -182,8 +186,11 @@ def baza_url(monkeypatch):
     if "test" not in nazwa_bazy:
         pytest.fail(f"TEST_DATABASE_URL wskazuje na bazę '{nazwa_bazy}' - nazwa musi zawierać 'test', żeby nie wyczyścić prawdziwej")
     import psycopg
-    with psycopg.connect(url, autocommit=True) as conn:
-        conn.execute("DROP TABLE IF EXISTS oferty, odrzucone, szukania CASCADE")
-    from pydantic import SecretStr
+    try:
+        with psycopg.connect(url, autocommit=True, connect_timeout=5) as conn:
+            conn.execute("DROP TABLE IF EXISTS oferty, odrzucone, szukania CASCADE")
+    except psycopg.OperationalError as e:
+        # jedna czytelna linia zamiast ekranu błędów (np. złe hasło albo wyłączony Docker)
+        pytest.fail(f"Nie mogę połączyć się z bazą testową ({nazwa_bazy}): {str(e).splitlines()[0]}", pytrace=False)
     monkeypatch.setattr(ustawienia, "database_url", SecretStr(url))
     return url

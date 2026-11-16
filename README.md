@@ -111,10 +111,12 @@ agent-oferty-pracy/
 │   ├── baza.py        # PostgreSQL (psycopg 3): tabele, zapis ON CONFLICT, historia wyszukiwań
 │   ├── api.py         # API w FastAPI (szukanie w tle, oferty, „wysłałem CV”)
 │   ├── zadania.py     # trwające szukania w pamięci + limit szukań naraz
+│   ├── tozsamosc.py   # użytkownik = HMAC z klucza API (bez kont i haseł)
 │   └── eksport.py     # zapis do .ods i .json
 ├── docs/              # zrzuty ekranu do README
 ├── static/
-│   └── index.html     # strona: formularz, postęp szukania, tabela ofert (czysty JS)
+│   ├── index.html     # strona: formularz, postęp szukania, tabela ofert
+│   └── app.js         # logika strony (czysty JS, osobny plik ze względu na CSP)
 ├── tests/             # testy pytest (udawany Claude, lokalny portal, baza testowa)
 ├── .github/workflows/ # testy uruchamiane automatycznie na GitHubie
 ├── szukaj.py          # uruchomienie z konsoli
@@ -255,6 +257,7 @@ Strona to jeden plik bez bibliotek. Dane ofert pochodzą z obcych stron, więc w
 | Metoda | Adres | Co robi |
 |---|---|---|
 | `POST` | `/szukaj` | uruchamia szukanie w tle i od razu zwraca `202` z `id` (płatne - klucz z nagłówka `X-Api-Key`) |
+| `GET` | `/szukania` | moje ostatnie szukania |
 | `GET` | `/szukaj/{id}` | postęp: status, runda, liczba ofert, koszt (`404`, gdy nie ma) |
 | `GET` | `/oferty` | oferty z bazy, filtry: `?pasuje=PASUJE`, `?aplikowano=true`, `?szukanie_id=3`, `?limit=50` |
 | `GET` | `/oferty/{id}` | jedna oferta (`404`, gdy nie ma) |
@@ -269,7 +272,9 @@ Klucz API (każdy używa swojego):
 - przed startem sprawdzam go darmowym zapytaniem do Models API, więc zły klucz daje `401` od razu,
 - bez nagłówka API bierze mój klucz z `.env` (wygodne lokalnie); przed wystawieniem do internetu ustawiam `API_KLUCZ_SERWERA=false`.
 
-Inne zabezpieczenia: naraz idą maks. `API_MAKS_SZUKAN` szukań (kolejne dostają `429`), budżet jednego szukania jest ograniczony przez `BUDZET_MAX_USD`, a złe dane formularza dają `422`. Gdy baza nie działa, API odpowiada `503` zamiast się wywracać.
+Każdy widzi tylko swoje oferty, bez kont i haseł: klucz API jest „kontem”. Serwer liczy z niego identyfikator HMAC-SHA256 z tajnym sekretem serwera (`dane/sekret.key`, tworzony przy pierwszym starcie), więc samego klucza nie ma w bazie, a z identyfikatora nie da się go odtworzyć. Ta sama oferta może być u kilku osób. Cudze oferty i szukania wyglądają jak nieistniejące (`404`). Strona pamięta klucz w karcie przeglądarki, a po zaznaczeniu „zapamiętaj” - na urządzeniu; dlatego ma nagłówek CSP, który pozwala uruchamiać tylko skrypty z tego serwera.
+
+Inne zabezpieczenia: naraz idą maks. `API_MAKS_SZUKAN` szukań, jedna osoba ma jedno szukanie naraz i maks. `API_LIMIT_DZIENNY` na dobę (kolejne dostają `429`), budżet jednego szukania jest ograniczony przez `BUDZET_MAX_USD`, a złe dane formularza dają `422`. Gdy baza nie działa, API odpowiada `503` zamiast się wywracać.
 
 Przykład z PowerShella (lokalnie, bez nagłówka = mój klucz z `.env`; z cudzym kluczem dodaj `-Headers @{ "X-Api-Key" = "sk-ant-..." }`).
 Polskie znaki w kryteriach lepiej wpisywać na `/docs`, bo stary PowerShell 5.1 potrafi je zepsuć:
