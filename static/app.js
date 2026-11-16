@@ -100,12 +100,19 @@ async function start() {
     pokaz("Nie udało się połączyć z serwerem: " + e.message, "blad");
   }
   wczytajKlucz();
+  // service worker zawsze - potrzebny do instalacji jako aplikacja (PWA), nie tylko do powiadomień
+  if ("serviceWorker" in navigator) rejestracja().catch(() => {});
   await odswiezWszystko();
 }
 
 async function odswiezWszystko() {
   await wczytajSzukania();
+  // link z powiadomienia: /?szukanie=12 - od razu pokazuję oferty z tego szukania
+  const z = new URLSearchParams(location.search).get("szukanie");
+  if (z && [...$("f-szukanie").options].some((o) => o.value === z)) $("f-szukanie").value = z;
   await wczytajOferty();
+  await wczytajAutomat();
+  await stanPowiadomien();
 }
 
 // zmiana klucza = zmiana "konta": zapamiętuję go i pokazuję oferty tej osoby
@@ -114,10 +121,8 @@ $("zapamietaj").addEventListener("change", zapiszKlucz);
 
 // --- szukanie ---
 
-$("formularz").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  pokaz("");
-  const kryteria = {
+function kryteriaZFormularza() {
+  return {
     kategoria: $("kategoria").value,
     stanowisko: $("stanowisko").value.trim(),
     kwalifikacje: $("kwalifikacje").value.trim(),
@@ -126,6 +131,12 @@ $("formularz").addEventListener("submit", async (ev) => {
     zdalnie: $("zdalnie").checked,
     budzet_usd: Number($("budzet").value),
   };
+}
+
+$("formularz").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  pokaz("");
+  const kryteria = kryteriaZFormularza();
   const naglowki = { "Content-Type": "application/json" };
   zapiszKlucz();
 
@@ -316,3 +327,121 @@ $("pobierz-ods").addEventListener("click", async () => {
   }
 });
 start();
+
+
+// --- automatyczne szukanie ---
+
+function maKlucz() {
+  return Boolean($("klucz").value.trim()) || kluczSerwera;
+}
+
+async function wczytajAutomat() {
+  $("a-wylacz").hidden = true;
+  $("a-wlacz").textContent = "Włącz automat";
+  if (!maKlucz()) { $("a-stan").textContent = "Wpisz klucz API, żeby włączyć automat."; return; }
+  let a = null;
+  try { a = await api("/automat"); } catch { /* np. brak bazy - pokażę jako wyłączony */ }
+  if (!a) {
+    $("a-stan").textContent = "Wyłączone. Automat szuka z kryteriami z formularza powyżej i daje znać powiadomieniem.";
+    return;
+  }
+  $("a-dni").value = a.co_ile_dni;
+  $("a-godzina").value = a.godzina;
+  $("a-wylacz").hidden = false;
+  $("a-wlacz").textContent = "Zapisz zmiany";
+  const kiedy = (d) => new Date(d).toLocaleString("pl-PL", { dateStyle: "short", timeStyle: "short" });
+  const tekst = a.wlaczony
+    ? `Włączone: „${a.kryteria.stanowisko}”, co ${a.co_ile_dni} dni o ${a.godzina}:00. Następne: ${a.nastepne ? kiedy(a.nastepne) : "-"}.`
+    : "Wstrzymane.";
+  $("a-stan").textContent = tekst + (a.ostatni_wynik ? ` Ostatnio: ${a.ostatni_wynik}.` : "");
+}
+
+$("a-wlacz").addEventListener("click", async () => {
+  if (!$("a-zgoda").checked) { pokaz("Zaznacz zgodę na zapisanie klucza - bez niego serwer nie poszuka sam.", "blad"); return; }
+  if (!$("formularz").reportValidity()) return;   // te same kryteria co w formularzu
+  zapiszKlucz();
+  try {
+    await api("/automat", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kryteria: kryteriaZFormularza(), co_ile_dni: Number($("a-dni").value),
+                             godzina: Number($("a-godzina").value), zgoda_na_zapis_klucza: true }),
+    });
+    pokaz("Automat włączony. Włącz też powiadomienia, żeby wiedzieć o nowych ofertach.", "ok");
+  } catch (e) { pokaz(e.message, "blad"); }
+  await wczytajAutomat();
+});
+
+$("a-wylacz").addEventListener("click", async () => {
+  try { await api("/automat", { method: "DELETE" }); pokaz("Automat wyłączony, Twój klucz usunięty z serwera.", "ok"); }
+  catch (e) { pokaz(e.message, "blad"); }
+  $("a-zgoda").checked = false;
+  await wczytajAutomat();
+});
+
+// --- powiadomienia push (PWA) ---
+
+const pushDostepny = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+function kluczNaBajty(b64) {
+  // klucz VAPID przychodzi w base64url, a przeglądarka chce bajty
+  const czyste = (b64 + "=".repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(czyste), (z) => z.charCodeAt(0));
+}
+
+async function rejestracja() {
+  return navigator.serviceWorker.register("/sw.js");
+}
+
+async function stanPowiadomien() {
+  $("p-test").hidden = true;
+  if (!pushDostepny) {
+    $("p-wlacz").disabled = true;
+    $("p-stan").textContent = "Ta przeglądarka nie obsługuje powiadomień. Na iPhonie dodaj najpierw stronę do ekranu głównego.";
+    return;
+  }
+  if (Notification.permission === "denied") {
+    $("p-stan").textContent = "Powiadomienia są zablokowane w ustawieniach przeglądarki dla tej strony.";
+    return;
+  }
+  try {
+    const sub = await (await rejestracja()).pushManager.getSubscription();
+    if (sub && maKlucz()) {
+      // przypisuję to urządzenie do obecnego klucza (np. po zmianie klucza)
+      await api("/push/subskrypcja", { method: "POST", headers: { "Content-Type": "application/json" },
+                                       body: JSON.stringify(sub.toJSON()) });
+      $("p-stan").textContent = "Włączone na tym urządzeniu.";
+      $("p-wlacz").textContent = "Wyłącz na tym urządzeniu";
+      $("p-test").hidden = false;
+      return;
+    }
+  } catch { /* np. brak klucza - poniżej domyślny stan */ }
+  $("p-wlacz").textContent = "Włącz na tym urządzeniu";
+  $("p-stan").textContent = "";
+}
+
+$("p-wlacz").addEventListener("click", async () => {
+  if (!maKlucz()) { pokaz("Wpisz najpierw klucz API.", "blad"); return; }
+  $("p-wlacz").disabled = true;
+  try {
+    const reg = await rejestracja();
+    const obecna = await reg.pushManager.getSubscription();
+    if (obecna) {   // wyłączanie
+      await api("/push/subskrypcja", { method: "DELETE", headers: { "Content-Type": "application/json" },
+                                       body: JSON.stringify(obecna.toJSON()) }).catch(() => {});
+      await obecna.unsubscribe();
+    } else {
+      if (await Notification.requestPermission() !== "granted") throw new Error("Nie zezwolono na powiadomienia.");
+      const { klucz_publiczny } = await api("/push/klucz");
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: kluczNaBajty(klucz_publiczny) });
+      await api("/push/subskrypcja", { method: "POST", headers: { "Content-Type": "application/json" },
+                                       body: JSON.stringify(sub.toJSON()) });
+    }
+  } catch (e) { pokaz(e.message, "blad"); }
+  $("p-wlacz").disabled = false;
+  await stanPowiadomien();
+});
+
+$("p-test").addEventListener("click", async () => {
+  try { await api("/push/test", { method: "POST" }); pokaz("Wysłano próbne powiadomienie.", "ok"); }
+  catch (e) { pokaz(e.message, "blad"); }
+});

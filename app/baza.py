@@ -10,6 +10,7 @@ import datetime
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 SCHEMAT = [
     # historia wyszukiwań - kryteria, postęp i koszt (przyda się na stronie do paska postępu)
@@ -62,6 +63,26 @@ SCHEMAT = [
     "ALTER TABLE odrzucone DROP CONSTRAINT IF EXISTS odrzucone_pkey",
     "CREATE UNIQUE INDEX IF NOT EXISTS odrzucone_uzytkownik_link ON odrzucone (uzytkownik, link) NULLS NOT DISTINCT",
     "CREATE INDEX IF NOT EXISTS szukania_uzytkownik_kiedy ON szukania (uzytkownik, utworzono)",
+    # --- etap D: automatyczne szukanie co X dni + powiadomienia push ---
+    "ALTER TABLE szukania ADD COLUMN IF NOT EXISTS automatyczne BOOLEAN DEFAULT FALSE",
+    """CREATE TABLE IF NOT EXISTS automaty (
+        uzytkownik TEXT PRIMARY KEY,
+        kryteria JSONB NOT NULL,
+        co_ile_dni INTEGER NOT NULL DEFAULT 2 CHECK (co_ile_dni BETWEEN 1 AND 14),
+        godzina INTEGER NOT NULL DEFAULT 7 CHECK (godzina BETWEEN 0 AND 23),
+        klucz_zaszyfrowany BYTEA NOT NULL,   -- Fernet, patrz tozsamosc.py; kasowany razem z automatem
+        wlaczony BOOLEAN NOT NULL DEFAULT TRUE,
+        ostatnio TIMESTAMPTZ,
+        ostatni_wynik TEXT,
+        utworzono TIMESTAMPTZ DEFAULT NOW()
+    )""",
+    """CREATE TABLE IF NOT EXISTS subskrypcje_push (
+        id SERIAL PRIMARY KEY,
+        uzytkownik TEXT NOT NULL,
+        endpoint TEXT UNIQUE NOT NULL,       -- adres usługi push przeglądarki (jedna przeglądarka = jedna subskrypcja)
+        dane JSONB NOT NULL,                 -- endpoint + klucze szyfrowania od przeglądarki
+        utworzono TIMESTAMPTZ DEFAULT NOW()
+    )""",
 ]
 
 
@@ -91,14 +112,14 @@ def widziane_linki(url, uzytkownik):
     return {wiersz[0] for wiersz in linki}
 
 
-def nowe_szukanie(url, kryteria, uzytkownik):
+def nowe_szukanie(url, kryteria, uzytkownik, automatyczne=False):
     with polacz(url) as conn:
         wiersz = conn.execute(
             """INSERT INTO szukania (uzytkownik, kategoria, stanowisko, kwalifikacje, doswiadczenie, miasto, zdalnie,
-                                     budzet_usd)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                                     budzet_usd, automatyczne)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (uzytkownik, kryteria.kategoria, kryteria.stanowisko, kryteria.kwalifikacje, kryteria.doswiadczenie,
-             kryteria.miasto, kryteria.zdalnie, kryteria.budzet_usd),
+             kryteria.miasto, kryteria.zdalnie, kryteria.budzet_usd, automatyczne),
         ).fetchone()
     return wiersz[0]
 
@@ -221,3 +242,94 @@ def moje_szukania(url, uzytkownik, limit=20):
         conn.row_factory = dict_row
         return conn.execute("""SELECT id, utworzono, status, stanowisko, miasto, liczba_ofert, koszt_usd FROM szukania
                                WHERE uzytkownik = %s ORDER BY id DESC LIMIT %s""", (uzytkownik, limit)).fetchall()
+
+
+
+# ---------- automatyczne szukanie ----------
+
+def zapisz_automat(url, uzytkownik, kryteria, co_ile_dni, godzina, klucz_zaszyfrowany):
+    """Włącza (albo zmienia) automat. ostatnio = teraz, więc pierwsze szukanie za co_ile_dni o danej godzinie."""
+    with polacz(url) as conn:
+        conn.execute(
+            """INSERT INTO automaty (uzytkownik, kryteria, co_ile_dni, godzina, klucz_zaszyfrowany, wlaczony, ostatnio)
+               VALUES (%s, %s, %s, %s, %s, TRUE, NOW())
+               ON CONFLICT (uzytkownik) DO UPDATE SET kryteria = EXCLUDED.kryteria, co_ile_dni = EXCLUDED.co_ile_dni,
+                   godzina = EXCLUDED.godzina, klucz_zaszyfrowany = EXCLUDED.klucz_zaszyfrowany, wlaczony = TRUE,
+                   ostatni_wynik = NULL""",
+            (uzytkownik, Jsonb(kryteria), co_ile_dni, godzina, klucz_zaszyfrowany),
+        )
+
+
+def automat(url, uzytkownik):
+    """Ustawienia automatu BEZ zaszyfrowanego klucza (ten nigdy nie wychodzi z bazy do API)."""
+    with polacz(url) as conn:
+        conn.row_factory = dict_row
+        return conn.execute("""SELECT kryteria, co_ile_dni, godzina, wlaczony, ostatnio, ostatni_wynik FROM automaty
+                               WHERE uzytkownik = %s""", (uzytkownik,)).fetchone()
+
+
+def usun_automat(url, uzytkownik):
+    """Wyłączenie = usunięcie całego wiersza, razem z zaszyfrowanym kluczem."""
+    with polacz(url) as conn:
+        return conn.execute("DELETE FROM automaty WHERE uzytkownik = %s", (uzytkownik,)).rowcount > 0
+
+
+# komu przyszła pora: dziś (w mojej strefie czasowej) minęła godzina startu, a od ostatniego szukania
+# minęło co najmniej co_ile_dni DNI KALENDARZOWYCH. Dni, nie godziny - inaczej start "co 2 dni o 7:00"
+# by się przesuwał, a zwykły cron "*/2" na przełomie miesięcy odpala się dwa dni z rzędu (31. i 1.)
+_PORA = """wlaczony
+    AND EXTRACT(HOUR FROM NOW() AT TIME ZONE %(strefa)s) >= godzina
+    AND (ostatnio IS NULL
+         OR (NOW() AT TIME ZONE %(strefa)s)::date - (ostatnio AT TIME ZONE %(strefa)s)::date >= co_ile_dni)"""
+
+
+def przejmij_automat(url, strefa):
+    """Bierze JEDEN automat, któremu przyszła pora, i od razu ustawia mu ostatnio = teraz.
+    FOR UPDATE SKIP LOCKED - nawet przy kilku procesach serwera każdy automat ruszy tylko raz.
+    Zwraca też poprzednie "ostatnio", żeby je przywrócić, gdy serwer jest zajęty."""
+    with polacz(url) as conn:
+        conn.row_factory = dict_row
+        return conn.execute(
+            f"""WITH kandydat AS (
+                    SELECT uzytkownik, ostatnio FROM automaty WHERE {_PORA}
+                    ORDER BY ostatnio NULLS FIRST LIMIT 1 FOR UPDATE SKIP LOCKED)
+                UPDATE automaty a SET ostatnio = NOW() FROM kandydat k WHERE a.uzytkownik = k.uzytkownik
+                RETURNING a.uzytkownik, a.kryteria, a.klucz_zaszyfrowany, k.ostatnio AS poprzednio""",
+            {"strefa": strefa},
+        ).fetchone()
+
+
+def oddaj_automat(url, uzytkownik, poprzednio):
+    """Serwer był zajęty - cofam ostatnio, więc automat ruszy przy następnym sprawdzeniu."""
+    with polacz(url) as conn:
+        conn.execute("UPDATE automaty SET ostatnio = %s WHERE uzytkownik = %s", (poprzednio, uzytkownik))
+
+
+def wynik_automatu(url, uzytkownik, opis, wylacz=False):
+    with polacz(url) as conn:
+        conn.execute("UPDATE automaty SET ostatni_wynik = %s, wlaczony = wlaczony AND NOT %s WHERE uzytkownik = %s",
+                     (opis, wylacz, uzytkownik))
+
+
+# ---------- subskrypcje push ----------
+
+def zapisz_subskrypcje(url, uzytkownik, dane):
+    # ta sama przeglądarka zapisana drugi raz (albo przez kogoś z innym kluczem) - nadpisuję właściciela
+    with polacz(url) as conn:
+        conn.execute("""INSERT INTO subskrypcje_push (uzytkownik, endpoint, dane) VALUES (%s, %s, %s)
+                        ON CONFLICT (endpoint) DO UPDATE SET uzytkownik = EXCLUDED.uzytkownik, dane = EXCLUDED.dane""",
+                     (uzytkownik, dane["endpoint"], Jsonb(dane)))
+
+
+def subskrypcje(url, uzytkownik):
+    with polacz(url) as conn:
+        return [w[0] for w in conn.execute("SELECT dane FROM subskrypcje_push WHERE uzytkownik = %s", (uzytkownik,))]
+
+
+def usun_subskrypcje(url, endpoint, uzytkownik=None):
+    """uzytkownik=None - usuwa ją serwer, bo usługa push odpowiedziała, że subskrypcja wygasła."""
+    with polacz(url) as conn:
+        if uzytkownik is None:
+            return conn.execute("DELETE FROM subskrypcje_push WHERE endpoint = %s", (endpoint,)).rowcount > 0
+        return conn.execute("DELETE FROM subskrypcje_push WHERE endpoint = %s AND uzytkownik = %s",
+                            (endpoint, uzytkownik)).rowcount > 0

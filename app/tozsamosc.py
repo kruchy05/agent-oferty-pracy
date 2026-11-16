@@ -6,10 +6,13 @@
 # - bez sekretu serwera nikt (np. po wycieku bazy) nie sprawdzi, czy dany klucz pasuje do danych w bazie
 # Minus tego podejścia: po zmianie klucza API ktoś zaczyna od pustej listy ofert.
 
+import base64
 import hashlib
 import hmac
 import secrets
 import threading
+
+from cryptography.fernet import Fernet, InvalidToken
 
 from .config import KATALOG_DANYCH, ustawienia
 
@@ -36,3 +39,26 @@ def sekret_serwera():
 def id_uzytkownika(klucz_api):
     """32 znaki hex - na stałe przypisane do klucza API (dopóki sekret serwera się nie zmieni)."""
     return hmac.new(sekret_serwera(), klucz_api.strip().encode(), hashlib.sha256).hexdigest()[:32]
+
+
+# ---------- szyfrowanie kluczy API (tylko dla automatycznego szukania) ----------
+# Żeby serwer mógł sam szukać co 2 dni, musi mieć klucz API użytkownika. Trzymam go zaszyfrowanego
+# (Fernet = AES + podpis HMAC, z biblioteki cryptography), a klucz do szyfrowania wyprowadzam z sekretu serwera.
+# Zapisuję go tylko wtedy, gdy ktoś sam włączy automat i zaznaczy zgodę. Wyłączenie automatu = usunięcie klucza.
+
+
+def _fernet():
+    klucz = hmac.new(sekret_serwera(), b"szyfrowanie-kluczy-api", hashlib.sha256).digest()
+    return Fernet(base64.urlsafe_b64encode(klucz))
+
+
+def zaszyfruj(tekst):
+    return _fernet().encrypt(tekst.encode())
+
+
+def odszyfruj(dane):
+    """None, gdy się nie da (np. zmieniony sekret serwera) - wtedy automat trzeba włączyć od nowa."""
+    try:
+        return _fernet().decrypt(bytes(dane)).decode()
+    except (InvalidToken, ValueError, TypeError):
+        return None

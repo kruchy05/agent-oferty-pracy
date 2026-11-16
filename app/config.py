@@ -58,6 +58,16 @@ class Ustawienia(BaseSettings):
     # Brak = generuję go sam do dane/sekret.key. Zmiana albo utrata = wszyscy "tracą" swoje oferty!
     sekret_serwera: Optional[SecretStr] = None
 
+    # automatyczne szukanie (co X dni o danej godzinie) i powiadomienia push z PWA
+    harmonogram_wlaczony: bool = True        # wątek, który sprawdza, czy komuś nie przyszła pora na szukanie
+    harmonogram_co_sekund: int = 60
+    strefa_czasowa: str = "Europe/Warsaw"    # w tej strefie liczę "o 7:00"
+    # klucze VAPID - serwer podpisuje nimi powiadomienia. Brak = generuję sam do dane/vapid.json
+    vapid_prywatny: Optional[SecretStr] = None
+    vapid_publiczny: Optional[str] = None
+    # kontakt do mnie dla usług push (Google, Apple, Mozilla) - na serwerze wpisać prawdziwy mail
+    vapid_kontakt: str = "mailto:agent-ofert@example.com"
+
     # obecne modele nie używają temperatury - ustaw tylko dla starszego modelu
     temperatura_szukanie: Optional[float] = None
     temperatura_porzadkowanie: Optional[float] = None

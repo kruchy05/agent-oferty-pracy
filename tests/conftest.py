@@ -22,6 +22,10 @@ import app.agent as AG
 import app.portale as PO
 from app.config import ustawienia
 
+from app.powiadomienia import nowe_klucze_vapid
+
+_VAPID = nowe_klucze_vapid()   # jedna para na całe testy - nic nie zapisuje do dane/
+
 DZIS = datetime.date.today()
 SWIEZA = (DZIS - datetime.timedelta(days=5)).isoformat()
 STARA = (DZIS - datetime.timedelta(days=150)).isoformat()
@@ -83,7 +87,10 @@ def ustawienia_testowe(monkeypatch, tmp_path):
                            "api_klucz_serwera": True, "api_maks_szukan": 2, "budzet_max_usd": 1.0,
                            "api_limit_dzienny": 10,
                            # stały sekret - testy nie mogą tworzyć dane/sekret.key w moim folderze
-                           "sekret_serwera": SecretStr("sekret-do-testow")}.items():
+                           "sekret_serwera": SecretStr("sekret-do-testow"),
+                           # bez wątku harmonogramu w tle - testy wołają harmonogram.tyknij() same
+                           "harmonogram_wlaczony": False,
+                           "vapid_prywatny": SecretStr(_VAPID["prywatny"]), "vapid_publiczny": _VAPID["publiczny"]}.items():
         monkeypatch.setattr(ustawienia, nazwa, wartosc)
     # lokalny portal jako dozwolony portal, jedna grupa = wszystkie portale w jednej rundzie
     monkeypatch.setattr(PO, "PORTALE_OGOLNE", ["127.0.0.1"] + PO.PORTALE_OGOLNE)
@@ -188,7 +195,7 @@ def baza_url(monkeypatch):
     import psycopg
     try:
         with psycopg.connect(url, autocommit=True, connect_timeout=5) as conn:
-            conn.execute("DROP TABLE IF EXISTS oferty, odrzucone, szukania CASCADE")
+            conn.execute("DROP TABLE IF EXISTS oferty, odrzucone, szukania, automaty, subskrypcje_push CASCADE")
     except psycopg.OperationalError as e:
         # jedna czytelna linia zamiast ekranu błędów (np. złe hasło albo wyłączony Docker)
         pytest.fail(f"Nie mogę połączyć się z bazą testową ({nazwa_bazy}): {str(e).splitlines()[0]}", pytrace=False)
