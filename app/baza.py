@@ -83,6 +83,12 @@ SCHEMAT = [
         dane JSONB NOT NULL,                 -- endpoint + klucze szyfrowania od przeglądarki
         utworzono TIMESTAMPTZ DEFAULT NOW()
     )""",
+    # --- etap E: profil z CV (samo CV nie jest zapisywane, tylko to, co z niego wynika) ---
+    """CREATE TABLE IF NOT EXISTS profile (
+        uzytkownik TEXT PRIMARY KEY,
+        profil JSONB NOT NULL,
+        zaktualizowano TIMESTAMPTZ DEFAULT NOW()
+    )""",
 ]
 
 
@@ -333,3 +339,23 @@ def usun_subskrypcje(url, endpoint, uzytkownik=None):
             return conn.execute("DELETE FROM subskrypcje_push WHERE endpoint = %s", (endpoint,)).rowcount > 0
         return conn.execute("DELETE FROM subskrypcje_push WHERE endpoint = %s AND uzytkownik = %s",
                             (endpoint, uzytkownik)).rowcount > 0
+
+
+# ---------- profil z CV ----------
+
+def zapisz_profil(url, uzytkownik, profil):
+    with polacz(url) as conn:
+        conn.execute("""INSERT INTO profile (uzytkownik, profil) VALUES (%s, %s)
+                        ON CONFLICT (uzytkownik) DO UPDATE SET profil = EXCLUDED.profil, zaktualizowano = NOW()""",
+                     (uzytkownik, Jsonb(profil)))
+
+
+def profil(url, uzytkownik):
+    with polacz(url) as conn:
+        w = conn.execute("SELECT profil FROM profile WHERE uzytkownik = %s", (uzytkownik,)).fetchone()
+    return w[0] if w else None
+
+
+def usun_profil(url, uzytkownik):
+    with polacz(url) as conn:
+        return conn.execute("DELETE FROM profile WHERE uzytkownik = %s", (uzytkownik,)).rowcount > 0

@@ -56,6 +56,7 @@
   .lewa { display: grid; gap: 20px; align-content: start; }
   .karta h3 { margin: 18px 0 6px; font-size: 15px; }
   .przyciski { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .cv { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
   .info { font-size: 13px; color: var(--szary); margin: 6px 0 0; }
   .komunikat { margin-top: 12px; padding: 10px 12px; border-radius: 8px; font-size: 14px; display: none; }
   .komunikat.blad { display: block; background: var(--zle-tlo); color: var(--zle); }
@@ -130,6 +131,12 @@
       <input id="stanowisko" required minlength="2" maxlength="200" placeholder="np. magazynier / kierowca wózka">
 
       <label for="kwalifikacje">Twoje kwalifikacje <small>(opcjonalnie)</small></label>
+      <div class="cv">
+        <input id="cv-plik" type="file" accept="application/pdf" hidden>
+        <button id="cv-btn" type="button" class="drugi maly">Wczytaj z CV (PDF)</button>
+        <button id="cv-usun" type="button" class="drugi maly" hidden>Usuń profil z CV</button>
+      </div>
+      <p class="info" id="cv-stan">Claude odczyta z CV Twoje umiejętności i doświadczenie (ok. 1 grosz). Samo CV nie jest zapisywane.</p>
       <textarea id="kwalifikacje" maxlength="1000" placeholder="np. prawo jazdy B, uprawnienia UDT, angielski B1"></textarea>
 
       <label for="doswiadczenie">Doświadczenie</label>

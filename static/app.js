@@ -113,6 +113,7 @@ async function odswiezWszystko() {
   await wczytajOferty();
   await wczytajAutomat();
   await stanPowiadomien();
+  await wczytajProfil();
 }
 
 // zmiana klucza = zmiana "konta": zapamiętuję go i pokazuję oferty tej osoby
@@ -444,4 +445,62 @@ $("p-wlacz").addEventListener("click", async () => {
 $("p-test").addEventListener("click", async () => {
   try { await api("/push/test", { method: "POST" }); pokaz("Wysłano próbne powiadomienie.", "ok"); }
   catch (e) { pokaz(e.message, "blad"); }
+});
+
+
+// --- profil z CV ---
+
+function wypelnijZProfilu(p, nadpisz) {
+  // nadpisz = świeżo wczytane CV; przy starcie strony nie ruszam tego, co ktoś już wpisał
+  if (nadpisz || !$("kwalifikacje").value.trim()) $("kwalifikacje").value = p.kwalifikacje;
+  if (nadpisz) {
+    $("doswiadczenie").value = p.doswiadczenie;
+    $("kategoria").value = p.kategoria;
+  }
+  if (!$("stanowisko").value.trim() && p.stanowiska.length) $("stanowisko").value = p.stanowiska.slice(0, 2).join(" / ");
+  if (!$("miasto").value.trim() && p.miasto) $("miasto").value = p.miasto;
+  $("cv-usun").hidden = false;
+}
+
+async function wczytajProfil() {
+  $("cv-usun").hidden = true;
+  if (!maKlucz()) return;
+  try {
+    const p = await api("/cv");
+    if (p) {
+      wypelnijZProfilu(p, false);
+      $("cv-stan").textContent = `Profil z CV: ${p.podsumowanie}`;
+    }
+  } catch { /* brak bazy albo klucza - formularz zostaje pusty */ }
+}
+
+$("cv-btn").addEventListener("click", () => {
+  if (!maKlucz()) { pokaz("Wpisz najpierw klucz API - CV czyta Claude na Twój koszt (ok. 1 grosz).", "blad"); return; }
+  $("cv-plik").click();
+});
+
+$("cv-plik").addEventListener("change", async () => {
+  const plik = $("cv-plik").files[0];
+  $("cv-plik").value = "";   // ten sam plik drugi raz też ma wywołać "change"
+  if (!plik) return;
+  if (plik.size > 5 * 1024 * 1024) { pokaz("Plik jest za duży (maks. 5 MB).", "blad"); return; }
+  zapiszKlucz();
+  $("cv-btn").disabled = true;
+  $("cv-stan").textContent = "Czytam CV…";
+  try {
+    const { profil, koszt_usd } = await api("/cv", { method: "POST", headers: { "Content-Type": "application/pdf" }, body: plik });
+    wypelnijZProfilu(profil, true);
+    $("cv-stan").textContent = `Z CV (${koszt_usd.toFixed(4)} $): ${profil.podsumowanie} Proponowane: ${profil.stanowiska.join(", ")}.`;
+    pokaz("Uzupełniłem formularz z CV - sprawdź i popraw, zanim zaczniesz szukać.", "ok");
+  } catch (e) {
+    $("cv-stan").textContent = "";
+    pokaz("CV: " + e.message, "blad");
+  }
+  $("cv-btn").disabled = false;
+});
+
+$("cv-usun").addEventListener("click", async () => {
+  try { await api("/cv", { method: "DELETE" }); } catch (e) { pokaz(e.message, "blad"); return; }
+  $("cv-usun").hidden = true;
+  $("cv-stan").textContent = "Profil z CV usunięty z serwera.";
 });
