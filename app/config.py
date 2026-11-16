@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # folder projektu (ten nad app/) - od niego liczę ścieżki, żeby nie zależały od tego, skąd uruchamiam
 KATALOG_PROJEKTU = Path(__file__).resolve().parent.parent
 PLIK_WIDZIANE = KATALOG_PROJEKTU / "widziane_oferty.json"
+KATALOG_DANYCH = KATALOG_PROJEKTU / "dane"   # sekrety serwera tworzone przy pierwszym starcie (nie idą do gita)
 
 
 class Ustawienia(BaseSettings):
@@ -51,6 +52,11 @@ class Ustawienia(BaseSettings):
     # True = gdy ktoś nie poda swojego klucza, API weźmie MÓJ z .env (wygodne lokalnie).
     # Przed wystawieniem strony do internetu ustawić False, inaczej ktoś obcy szuka na mój koszt
     api_klucz_serwera: bool = True
+    api_limit_dzienny: int = 10              # ile szukań na dobę może zrobić jedna osoba (jeden klucz)
+
+    # tajny klucz serwera - z niego liczę identyfikator użytkownika z klucza API (HMAC).
+    # Brak = generuję go sam do dane/sekret.key. Zmiana albo utrata = wszyscy "tracą" swoje oferty!
+    sekret_serwera: Optional[SecretStr] = None
 
     # obecne modele nie używają temperatury - ustaw tylko dla starszego modelu
     temperatura_szukanie: Optional[float] = None

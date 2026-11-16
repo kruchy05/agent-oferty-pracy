@@ -32,3 +32,6 @@ Claude outputs/
 
 # testy
 .pytest_cache/
+
+# sekrety serwera tworzone przy pierwszym starcie (HMAC, VAPID) - NIE do gita, ale zrób kopię
+dane/

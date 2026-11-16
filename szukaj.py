@@ -103,11 +103,13 @@ def main(klient=None):
     szukanie_id, na_postep = None, None
     if url_bazy:
         from app import baza   # psycopg potrzebny tylko, gdy używam bazy
+        from app.tozsamosc import id_uzytkownika
+        ja = id_uzytkownika(klient.api_key)   # te same oferty co na stronie z tym samym kluczem
         try:
-            baza.przygotuj_baze(url_bazy)
+            baza.przygotuj_baze(url_bazy, ja)
             # stary plik dalej się liczy, żeby po przejściu na bazę nie płacić drugi raz za te same oferty
-            widziane = baza.widziane_linki(url_bazy) | wczytaj_widziane()
-            szukanie_id = baza.nowe_szukanie(url_bazy, kryteria)
+            widziane = baza.widziane_linki(url_bazy, ja) | wczytaj_widziane()
+            szukanie_id = baza.nowe_szukanie(url_bazy, kryteria, ja)
         except Exception as e:
             # sprawdzam bazę PRZED płatnym wyszukiwaniem - lepiej przerwać teraz niż zgubić wyniki
             print(f"Nie mogę połączyć się z bazą: {type(e).__name__}: {e}")
@@ -123,7 +125,7 @@ def main(klient=None):
 
     if url_bazy:
         try:
-            nowe, juz_byly = baza.zapisz_wyniki(url_bazy, przebieg, szukanie_id)
+            nowe, juz_byly = baza.zapisz_wyniki(url_bazy, przebieg, szukanie_id, ja)
             print(f"\nBaza: zapisano {nowe} nowych ofert" + (f" ({juz_byly} już było w bazie)" if juz_byly else ""))
         except Exception as e:
             # baza padła w trakcie - wyniki i tak trafią niżej do .ods / .json, a linki do pliku

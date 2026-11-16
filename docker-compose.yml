@@ -29,9 +29,12 @@ services:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/oferty
     ports:
       - "127.0.0.1:8000:8000"   # strona dostępna tylko z mojego komputera
+    volumes:
+      - dane:/app/dane          # sekret serwera (dane/sekret.key) - bez niego użytkownicy "gubią" oferty
     depends_on:
       db:
         condition: service_healthy   # API startuje dopiero, gdy baza przyjmuje połączenia
 
 volumes:
   pgdane-compose:
+  dane:

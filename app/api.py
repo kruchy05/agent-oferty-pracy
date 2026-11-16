@@ -2,17 +2,20 @@
 # Strona:  http://127.0.0.1:8000/   Dokumentacja z przyciskami do testowania:  http://127.0.0.1:8000/docs
 #
 # Klucz API użytkownika przychodzi w nagłówku X-Api-Key (nie w adresie - adresy lądują w logach).
-# Nie zapisuję go nigdzie: żyje tylko w pamięci, dopóki trwa szukanie.
+# Klucz jest też "kontem": z niego liczę identyfikator (HMAC, tozsamosc.py) i każdy widzi tylko swoje oferty.
+# Samego klucza nie zapisuję: żyje tylko w pamięci, dopóki trwa szukanie.
 
 import datetime
 import io
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Annotated, Literal, Optional
 
 import anthropic
 import psycopg
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import baza, zadania
@@ -21,6 +24,7 @@ from .config import KATALOG_PROJEKTU, ustawienia
 from .eksport import zapisz_ods
 from .modele import KryteriaSzukania
 from .portale import KATEGORIE
+from .tozsamosc import id_uzytkownika
 
 
 def url_bazy():
@@ -34,13 +38,30 @@ async def lifespan(app):
     # przy starcie tworzę brakujące tabele. Jak baza nie działa, serwer i tak wstaje -
     # endpointy oddadzą wtedy 503, zamiast całość wywalać się na starcie
     try:
-        baza.przygotuj_baze(url_bazy())
+        # moje stare oferty (sprzed rozdzielenia użytkowników) dostaje właściciel klucza z .env
+        wlasciciel = id_uzytkownika(ustawienia.anthropic_api_key.get_secret_value()) if ustawienia.anthropic_api_key else None
+        baza.przygotuj_baze(url_bazy(), wlasciciel)
     except Exception as e:
         print(f"[UWAGA] Baza niedostępna przy starcie: {type(e).__name__}: {e}  (docker start moj-postgres)")
     yield
 
 
-app = FastAPI(title="Agent ofert pracy", version="0.5.0", lifespan=lifespan)
+app = FastAPI(title="Agent ofert pracy", version="0.6.0", lifespan=lifespan)
+
+# CSP: przeglądarka uruchomi tylko skrypty z tego serwera (żadnych wstrzykniętych <script> ani inline).
+# Ważne, bo strona może pamiętać klucz API w przeglądarce, a dane ofert pochodzą z obcych stron
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+       "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+
+
+@app.middleware("http")
+async def naglowki_bezpieczenstwa(request: Request, call_next):
+    odpowiedz = await call_next(request)
+    if not request.url.path.startswith(("/docs", "/redoc")):   # Swagger ładuje skrypty z CDN - tam bez CSP
+        odpowiedz.headers.setdefault("Content-Security-Policy", CSP)
+    odpowiedz.headers.setdefault("X-Content-Type-Options", "nosniff")
+    odpowiedz.headers.setdefault("Referrer-Policy", "no-referrer")   # linki do ofert nie zdradzają adresu strony
+    return odpowiedz
 
 
 @app.exception_handler(psycopg.OperationalError)
@@ -89,6 +110,16 @@ class Przyjete(BaseModel):
     adres_statusu: str
 
 
+class MojeSzukanie(BaseModel):
+    id: int
+    utworzono: datetime.datetime
+    status: str
+    stanowisko: Optional[str]
+    miasto: Optional[str]
+    liczba_ofert: Optional[int]
+    koszt_usd: Optional[float]
+
+
 # ---------- klucz API ----------
 
 def nowy_klient(klucz):
@@ -97,6 +128,7 @@ def nowy_klient(klucz):
 
 
 def klucz_uzytkownika(x_api_key):
+    """Klucz z nagłówka (sprawdzam tylko format) albo - lokalnie - mój z .env."""
     if x_api_key:
         klucz = x_api_key.strip()
         # tylko sprawdzenie formatu - czy klucz działa, sprawdzam niżej w Models API
@@ -122,46 +154,62 @@ def sprawdz_klucz(klient):
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Anthropic API odpowiedziało błędem {e.status_code}.")
 
 
+@dataclass
+class Uzytkownik:
+    klucz: str
+    id: str
+
+
+def kto(x_api_key: Annotated[Optional[str], Header(description="Twój klucz Anthropic API (sk-ant-...)")] = None):
+    """Każdy endpoint z danymi zaczyna od tego: klucz -> identyfikator użytkownika."""
+    klucz = klucz_uzytkownika(x_api_key)
+    return Uzytkownik(klucz=klucz, id=id_uzytkownika(klucz))
+
+
+Ja = Annotated[Uzytkownik, Depends(kto)]
+
+
 # ---------- szukanie ----------
 
 @app.post("/szukaj", status_code=status.HTTP_202_ACCEPTED, response_model=Przyjete,
           summary="Uruchom szukanie w tle (płatne - Twój klucz API)")
-def szukaj(kryteria: KryteriaSzukania, zadania_w_tle: BackgroundTasks,
-           x_api_key: Annotated[Optional[str], Header(description="Twój klucz Anthropic API (sk-ant-...)")] = None):
+def szukaj(kryteria: KryteriaSzukania, zadania_w_tle: BackgroundTasks, ja: Ja):
     url = url_bazy()
-    klucz = klucz_uzytkownika(x_api_key)
-
-    zeton = zadania.zajmij_miejsce(ustawienia.api_maks_szukan)
+    if baza.szukania_w_ciagu_doby(url, ja.id) >= ustawienia.api_limit_dzienny:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
+                            f"Limit {ustawienia.api_limit_dzienny} szukań na dobę - spróbuj jutro.")
+    zeton, powod = zadania.zajmij_miejsce(ustawienia.api_maks_szukan, ja.id)
     if zeton is None:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
-                            f"Trwa już {ustawienia.api_maks_szukan} szukań naraz. Spróbuj za kilka minut.")
+                            "Twoje poprzednie szukanie jeszcze trwa." if powod == zadania.ZAJETY_UZYTKOWNIK
+                            else f"Trwa już {ustawienia.api_maks_szukan} szukań naraz. Spróbuj za kilka minut.")
     try:
-        klient = nowy_klient(klucz)
+        klient = nowy_klient(ja.klucz)
         sprawdz_klucz(klient)
-        widziane = baza.widziane_linki(url)
-        szukanie_id = baza.nowe_szukanie(url, kryteria)
+        widziane = baza.widziane_linki(url, ja.id)
+        szukanie_id = baza.nowe_szukanie(url, kryteria, ja.id)
     except BaseException:
         zadania.zwolnij(zeton)
         raise
 
     przebieg = Przebieg(klient, kryteria, widziane=widziane,
                         na_postep=lambda p: baza.aktualizuj_szukanie(url, szukanie_id, p))
-    zadania.dodaj(zeton, szukanie_id, przebieg)
+    zadania.dodaj(zeton, szukanie_id, ja.id, przebieg)
     # funkcja zwykła (def), więc Starlette odpala ją w osobnym wątku - odpowiedź 202 wraca od razu
-    zadania_w_tle.add_task(zadania.wykonaj, url, szukanie_id, przebieg)
+    zadania_w_tle.add_task(zadania.wykonaj, url, szukanie_id, ja.id, przebieg)
     return Przyjete(id=szukanie_id, status="trwa", adres_statusu=f"/szukaj/{szukanie_id}")
 
 
 @app.get("/szukaj/{szukanie_id}", response_model=StatusSzukania, summary="Postęp albo wynik szukania")
-def status_szukania(szukanie_id: int):
-    p = zadania.trwajace(szukanie_id)
+def status_szukania(szukanie_id: int, ja: Ja):
+    p = zadania.trwajace(szukanie_id, ja.id)
     if p is not None:
         l = p.licznik
         return StatusSzukania(id=szukanie_id, status="trwa" if p.status in ("nowy", "trwa") else p.status,
                               runda=p.runda, liczba_ofert=len(p.wyniki()), koszt_usd=round(l.usd, 4),
                               budzet_usd=l.budzet_usd, wyszukiwania=l.wyszukiwania, pobrania=l.pobrania,
                               blad=p.blad, na_zywo=True)
-    w = baza.jedno_szukanie(url_bazy(), szukanie_id)
+    w = baza.jedno_szukanie(url_bazy(), ja.id, szukanie_id)
     if w is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Nie ma szukania o id {szukanie_id}.")
     # "trwa" w bazie, a nie ma go w pamięci = serwer został wyłączony w trakcie
@@ -170,6 +218,11 @@ def status_szukania(szukanie_id: int):
                           koszt_usd=float(w["koszt_usd"] or 0), budzet_usd=float(w["budzet_usd"] or 0),
                           wyszukiwania=w["wyszukiwania"] or 0, pobrania=w["pobrania"] or 0,
                           blad=w["blad"], na_zywo=False)
+
+
+@app.get("/szukania", response_model=list[MojeSzukanie], summary="Moje ostatnie szukania")
+def szukania(ja: Ja):
+    return baza.moje_szukania(url_bazy(), ja.id)
 
 
 # ---------- oferty ----------
@@ -183,8 +236,8 @@ def _filtry_ofert(pasuje: Optional[Literal["PASUJE", "NIE PASUJE", "DO SPRAWDZEN
 
 
 @app.get("/oferty.ods", summary="Oferty jako arkusz .ods (te same filtry co /oferty)")
-def oferty_ods(filtry: Annotated[dict, Depends(_filtry_ofert)]):
-    wiersze = baza.lista_ofert(url_bazy(), **filtry)
+def oferty_ods(filtry: Annotated[dict, Depends(_filtry_ofert)], ja: Ja):
+    wiersze = baza.lista_ofert(url_bazy(), ja.id, **filtry)
     # w arkuszu kolumna "Data dodania" to data z ogłoszenia, tak jak w wersji z konsoli
     do_arkusza = [{**w, "data_dodania": w["data_publikacji"],
                    "status": "CV wysłane" if w["aplikowano"] else w["status"]} for w in wiersze]
@@ -197,30 +250,30 @@ def oferty_ods(filtry: Annotated[dict, Depends(_filtry_ofert)]):
 
 
 @app.get("/oferty", response_model=list[OfertaZBazy], summary="Oferty z bazy (darmowe)")
-def oferty(filtry: Annotated[dict, Depends(_filtry_ofert)]):
-    return baza.lista_ofert(url_bazy(), **filtry)
+def oferty(filtry: Annotated[dict, Depends(_filtry_ofert)], ja: Ja):
+    return baza.lista_ofert(url_bazy(), ja.id, **filtry)
 
 
 @app.get("/oferty/{oferta_id}", response_model=OfertaZBazy, summary="Jedna oferta")
-def oferta(oferta_id: int):
-    w = baza.jedna_oferta(url_bazy(), oferta_id)
+def oferta(oferta_id: int, ja: Ja):
+    w = baza.jedna_oferta(url_bazy(), ja.id, oferta_id)
     if w is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Nie ma oferty o id {oferta_id}.")
     return w
 
 
 @app.post("/oferty/{oferta_id}/aplikuj", response_model=OfertaZBazy, summary="Zaznacz: wysłałem CV (ręcznie)")
-def aplikuj(oferta_id: int):
+def aplikuj(oferta_id: int, ja: Ja):
     # półautomat: tu tylko ZAPISUJĘ, że wysłałem CV. Agent nigdy sam niczego nie wysyła
-    w = baza.oznacz_aplikowano(url_bazy(), oferta_id, True)
+    w = baza.oznacz_aplikowano(url_bazy(), ja.id, oferta_id, True)
     if w is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Nie ma oferty o id {oferta_id}.")
     return w
 
 
 @app.delete("/oferty/{oferta_id}/aplikuj", response_model=OfertaZBazy, summary="Cofnij zaznaczenie 'wysłałem CV'")
-def cofnij_aplikuj(oferta_id: int):
-    w = baza.oznacz_aplikowano(url_bazy(), oferta_id, False)
+def cofnij_aplikuj(oferta_id: int, ja: Ja):
+    w = baza.oznacz_aplikowano(url_bazy(), ja.id, oferta_id, False)
     if w is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Nie ma oferty o id {oferta_id}.")
     return w
@@ -235,12 +288,14 @@ def kategorie():
 def info():
     # strona po tym wie, czy pole na klucz jest wymagane. Samego klucza oczywiście nie zwracam
     return {"klucz_serwera": bool(ustawienia.api_klucz_serwera and ustawienia.anthropic_api_key),
-            "model": ustawienia.claude_model, "budzet_max_usd": ustawienia.budzet_max_usd}
+            "model": ustawienia.claude_model, "budzet_max_usd": ustawienia.budzet_max_usd,
+            "limit_dzienny": ustawienia.api_limit_dzienny}
 
 
 # ---------- strona ----------
 
 STRONA = KATALOG_PROJEKTU / "static" / "index.html"
+app.mount("/static", StaticFiles(directory=KATALOG_PROJEKTU / "static"), name="static")
 
 
 @app.get("/", include_in_schema=False)
