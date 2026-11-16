@@ -5,3 +5,5 @@ requests>=2.31
 psycopg[binary]>=3.2,<4
 fastapi>=0.115,<1
 uvicorn>=0.30
+cryptography>=44      # szyfrowanie zapisanych kluczy API (automat)
+pywebpush>=2.1,<3     # powiadomienia push

@@ -16,15 +16,15 @@ import psycopg
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, HttpUrl
 
-from . import baza, zadania
+from . import baza, harmonogram, powiadomienia, zadania
 from .agent import Przebieg
 from .config import KATALOG_PROJEKTU, ustawienia
 from .eksport import zapisz_ods
 from .modele import KryteriaSzukania
 from .portale import KATEGORIE
-from .tozsamosc import id_uzytkownika
+from .tozsamosc import id_uzytkownika, zaszyfruj
 
 
 def url_bazy():
@@ -43,7 +43,11 @@ async def lifespan(app):
         baza.przygotuj_baze(url_bazy(), wlasciciel)
     except Exception as e:
         print(f"[UWAGA] Baza niedostępna przy starcie: {type(e).__name__}: {e}  (docker start moj-postgres)")
+    # harmonogram automatycznego szukania - tylko gdy jest baza (z niej bierze, komu przyszła pora)
+    if ustawienia.harmonogram_wlaczony and ustawienia.database_url:
+        harmonogram.uruchom(url_bazy())
     yield
+    harmonogram.zatrzymaj()
 
 
 app = FastAPI(title="Agent ofert pracy", version="0.6.0", lifespan=lifespan)
@@ -279,6 +283,95 @@ def cofnij_aplikuj(oferta_id: int, ja: Ja):
     return w
 
 
+# ---------- automatyczne szukanie ----------
+
+class UstawieniaAutomatu(BaseModel):
+    kryteria: KryteriaSzukania
+    co_ile_dni: int = Field(2, ge=1, le=14)
+    godzina: int = Field(7, ge=0, le=23, description="godzina startu w strefie serwera (domyślnie Europe/Warsaw)")
+    # bez wyraźnej zgody nie zapisuję klucza - a bez klucza serwer nie poszuka sam
+    zgoda_na_zapis_klucza: Literal[True] = Field(description="Zgoda na zapisanie Twojego klucza API (zaszyfrowanego)")
+
+
+class StanAutomatu(BaseModel):
+    kryteria: KryteriaSzukania
+    co_ile_dni: int
+    godzina: int
+    wlaczony: bool
+    ostatnio: Optional[datetime.datetime]
+    ostatni_wynik: Optional[str]
+    nastepne: Optional[datetime.datetime]
+
+
+def _stan_automatu(w):
+    if w is None:
+        return None
+    from zoneinfo import ZoneInfo
+    strefa = ZoneInfo(ustawienia.strefa_czasowa)
+    nastepne = None
+    if w["wlaczony"] and w["ostatnio"]:
+        dzien = w["ostatnio"].astimezone(strefa).date() + datetime.timedelta(days=w["co_ile_dni"])
+        nastepne = datetime.datetime.combine(dzien, datetime.time(w["godzina"]), tzinfo=strefa)
+    return StanAutomatu(**w, nastepne=nastepne)
+
+
+@app.get("/automat", response_model=Optional[StanAutomatu], summary="Moje automatyczne szukanie (null = wyłączone)")
+def automat(ja: Ja):
+    return _stan_automatu(baza.automat(url_bazy(), ja.id))
+
+
+@app.put("/automat", response_model=StanAutomatu, summary="Włącz albo zmień automatyczne szukanie (zapisuje klucz)")
+def wlacz_automat(dane: UstawieniaAutomatu, ja: Ja):
+    url = url_bazy()
+    sprawdz_klucz(nowy_klient(ja.klucz))   # nie zapiszę klucza, który nie działa
+    baza.zapisz_automat(url, ja.id, dane.kryteria.model_dump(), dane.co_ile_dni, dane.godzina, zaszyfruj(ja.klucz))
+    return _stan_automatu(baza.automat(url, ja.id))
+
+
+@app.delete("/automat", status_code=status.HTTP_204_NO_CONTENT, summary="Wyłącz automat i usuń mój klucz z serwera")
+def wylacz_automat(ja: Ja):
+    baza.usun_automat(url_bazy(), ja.id)
+
+
+# ---------- powiadomienia push ----------
+
+class KluczePush(BaseModel):
+    p256dh: str = Field(max_length=200)
+    auth: str = Field(max_length=100)
+
+
+class Subskrypcja(BaseModel):
+    # dokładnie to, co daje przeglądarka w PushSubscription.toJSON()
+    endpoint: HttpUrl
+    keys: KluczePush
+
+
+@app.get("/push/klucz", summary="Publiczny klucz VAPID - przeglądarka potrzebuje go do subskrypcji")
+def klucz_push():
+    return {"klucz_publiczny": powiadomienia.klucze_vapid()["publiczny"]}
+
+
+@app.post("/push/subskrypcja", status_code=status.HTTP_201_CREATED, summary="Zapisz tę przeglądarkę do powiadomień")
+def zapisz_subskrypcje(sub: Subskrypcja, ja: Ja):
+    if sub.endpoint.scheme != "https":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Adres usługi push musi być https.")
+    baza.zapisz_subskrypcje(url_bazy(), ja.id, sub.model_dump(mode="json"))
+    return {"ok": True}
+
+
+@app.delete("/push/subskrypcja", status_code=status.HTTP_204_NO_CONTENT, summary="Wypisz tę przeglądarkę")
+def usun_subskrypcje(sub: Subskrypcja, ja: Ja):
+    baza.usun_subskrypcje(url_bazy(), str(sub.endpoint), ja.id)
+
+
+@app.post("/push/test", summary="Wyślij próbne powiadomienie na moje urządzenia")
+def test_push(ja: Ja):
+    ile = powiadomienia.powiadom(url_bazy(), ja.id, "Powiadomienia działają", "Tak będą wyglądać info o nowych ofertach.")
+    if not ile:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Nie mam żadnego Twojego urządzenia z włączonymi powiadomieniami.")
+    return {"wyslano": ile}
+
+
 @app.get("/kategorie", summary="Lista kategorii do formularza")
 def kategorie():
     return KATEGORIE
@@ -301,3 +394,15 @@ app.mount("/static", StaticFiles(directory=KATALOG_PROJEKTU / "static"), name="s
 @app.get("/", include_in_schema=False)
 def strona():
     return FileResponse(STRONA, media_type="text/html; charset=utf-8")
+
+
+@app.get("/sw.js", include_in_schema=False)
+def service_worker():
+    # service worker musi leżeć w katalogu głównym, żeby obejmował całą stronę (scope "/")
+    return FileResponse(KATALOG_PROJEKTU / "static" / "sw.js", media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def manifest():
+    return FileResponse(KATALOG_PROJEKTU / "static" / "manifest.webmanifest", media_type="application/manifest+json")

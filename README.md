@@ -25,7 +25,7 @@ Zrobiłem go w ramach nauki budowania aplikacji z AI: wywołania API modelu jęz
 
 ## Technologie
 
-Python 3.10+ · [Claude API](https://platform.claude.com) (Haiku, tool use, web search, structured outputs, prompt caching) · Pydantic + pydantic-settings · FastAPI + Uvicorn · PostgreSQL (psycopg 3) w Dockerze · HTML / CSS / JS bez bibliotek · Docker Compose · pytest + GitHub Actions
+Python 3.10+ · [Claude API](https://platform.claude.com) (Haiku, tool use, web search, structured outputs, prompt caching) · Pydantic + pydantic-settings · FastAPI + Uvicorn · PostgreSQL (psycopg 3) w Dockerze · HTML / CSS / JS bez bibliotek · PWA + Web Push · Docker Compose · pytest + GitHub Actions
 
 ```mermaid
 flowchart LR
@@ -111,12 +111,16 @@ agent-oferty-pracy/
 │   ├── baza.py        # PostgreSQL (psycopg 3): tabele, zapis ON CONFLICT, historia wyszukiwań
 │   ├── api.py         # API w FastAPI (szukanie w tle, oferty, „wysłałem CV”)
 │   ├── zadania.py     # trwające szukania w pamięci + limit szukań naraz
-│   ├── tozsamosc.py   # użytkownik = HMAC z klucza API (bez kont i haseł)
+│   ├── tozsamosc.py   # użytkownik = HMAC z klucza API, szyfrowanie zapisanych kluczy
+│   ├── harmonogram.py # automatyczne szukanie co X dni (wątek w tle)
+│   ├── powiadomienia.py # Web Push (VAPID)
 │   └── eksport.py     # zapis do .ods i .json
 ├── docs/              # zrzuty ekranu do README
 ├── static/
 │   ├── index.html     # strona: formularz, postęp szukania, tabela ofert
-│   └── app.js         # logika strony (czysty JS, osobny plik ze względu na CSP)
+│   ├── app.js         # logika strony (czysty JS, osobny plik ze względu na CSP)
+│   ├── sw.js          # service worker: powiadomienia push
+│   └── manifest.webmanifest # PWA: nazwa, ikony, instalacja na telefonie
 ├── tests/             # testy pytest (udawany Claude, lokalny portal, baza testowa)
 ├── .github/workflows/ # testy uruchamiane automatycznie na GitHubie
 ├── szukaj.py          # uruchomienie z konsoli
@@ -263,6 +267,10 @@ Strona to jeden plik bez bibliotek. Dane ofert pochodzą z obcych stron, więc w
 | `GET` | `/oferty/{id}` | jedna oferta (`404`, gdy nie ma) |
 | `POST` / `DELETE` | `/oferty/{id}/aplikuj` | zaznacza / cofa „wysłałem CV” - CV wysyłam sam, agent niczego nie wysyła |
 | `GET` | `/oferty.ods` | te same oferty i filtry jako arkusz LibreOffice |
+| `GET` / `PUT` / `DELETE` | `/automat` | stan / włączenie (zapisuje zaszyfrowany klucz) / wyłączenie automatu |
+| `GET` | `/push/klucz` | publiczny klucz VAPID dla przeglądarki |
+| `POST` / `DELETE` | `/push/subskrypcja` | zapis / wypisanie tej przeglądarki z powiadomień |
+| `POST` | `/push/test` | próbne powiadomienie |
 | `GET` | `/kategorie`, `/info` | lista kategorii i ustawienia dla strony (czy serwer ma swój klucz, maks. budżet) |
 
 Klucz API (każdy używa swojego):
@@ -285,6 +293,15 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/szukaj -Body $body -Content
 Invoke-RestMethod http://127.0.0.1:8000/szukaj/1
 Invoke-RestMethod "http://127.0.0.1:8000/oferty?pasuje=PASUJE"
 ```
+
+## Automatyczne szukanie i powiadomienia (PWA)
+
+Na stronie można włączyć automat: agent sam szuka **co X dni o wybranej godzinie** z kryteriami z formularza i wysyła **powiadomienie push** o nowych ofertach (tylko gdy są nowe). Strona działa jako PWA - na telefonie „Dodaj do ekranu głównego” daje ikonę i powiadomienia jak w aplikacji (na iPhonie powiadomienia działają tylko po dodaniu do ekranu głównego, iOS 16.4+).
+
+- **Klucz API przy automacie:** żeby serwer szukał bez Ciebie, musi mieć Twój klucz. Zapisuję go tylko po zaznaczeniu zgody, zaszyfrowanego (Fernet: AES + HMAC, klucz szyfrowania wyprowadzony z sekretu serwera). „Wyłącz i usuń klucz” kasuje go z bazy. Klucz, który przestał działać, wyłącza automat i wysyła powiadomienie.
+- **Co X dni:** liczę dni kalendarzowe, a nie godziny - start się nie przesuwa, a na przełomie miesięcy nie ma dwóch szukań z rzędu (problem zwykłego `cron */2`). Kilka procesów serwera nie odpali jednego automatu dwa razy (`FOR UPDATE SKIP LOCKED`).
+- **Powiadomienia:** Web Push z kluczami VAPID (`pywebpush`), treść szyfrowana dla konkretnej przeglądarki - usługa push (Google, Apple, Mozilla) widzi tylko zaszyfrowane bajty. Wygasłe subskrypcje serwer sam usuwa.
+- Automat działa, dopóki działa serwer - lokalnie tylko przy włączonym `uvicorn`, na serwerze cały czas.
 
 ## Testy
 

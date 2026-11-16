@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent ofert pracy</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#2457d6">
+<link rel="icon" href="/static/ikona-192.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <style>
   /* kolory jako zmienne, żeby ciemny motyw był jednym blokiem niżej */
   :root {
@@ -21,6 +25,7 @@
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }   /* inaczej display: inline-flex przycisków wygrywa z hidden */
   body { margin: 0; background: var(--tlo); color: var(--tekst);
          font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   .strona { max-width: 1320px; margin: 0 auto; padding: 24px 16px 48px; }
@@ -48,6 +53,9 @@
   button.maly { padding: 4px 9px; font-size: 13px; font-weight: 500; }
   button.wyslane { background: var(--ok-tlo); color: var(--ok); border-color: var(--ok); }
   #szukaj-btn { width: 100%; margin-top: 18px; }
+  .lewa { display: grid; gap: 20px; align-content: start; }
+  .karta h3 { margin: 18px 0 6px; font-size: 15px; }
+  .przyciski { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
   .info { font-size: 13px; color: var(--szary); margin: 6px 0 0; }
   .komunikat { margin-top: 12px; padding: 10px 12px; border-radius: 8px; font-size: 14px; display: none; }
   .komunikat.blad { display: block; background: var(--zle-tlo); color: var(--zle); }
@@ -105,6 +113,7 @@
 
   <div class="uklad">
     <!-- ===== formularz ===== -->
+    <div class="lewa">
     <form id="formularz" class="karta" autocomplete="on">
       <h2>Czego szukasz?</h2>
 
@@ -148,6 +157,35 @@
       <p class="info" id="koszt-info">Jedno szukanie to zwykle kilka centów. Nie przekroczy budżetu.</p>
       <div id="komunikat" class="komunikat" role="alert"></div>
     </form>
+
+    <!-- ===== automat i powiadomienia ===== -->
+    <section id="automat" class="karta">
+      <h2>Automatyczne szukanie</h2>
+      <p class="info" id="a-stan">Agent może sam szukać nowych ofert z kryteriami z formularza i dać Ci znać powiadomieniem.</p>
+      <div class="rzad">
+        <div>
+          <label for="a-dni">Co ile dni</label>
+          <input id="a-dni" type="number" min="1" max="14" value="2">
+        </div>
+        <div>
+          <label for="a-godzina">O godzinie</label>
+          <input id="a-godzina" type="number" min="0" max="23" value="7">
+        </div>
+      </div>
+      <label class="check"><input id="a-zgoda" type="checkbox"> zgadzam się, żeby serwer zapisał mój klucz API
+        (zaszyfrowany) - bez niego nie poszuka beze mnie</label>
+      <div class="przyciski">
+        <button id="a-wlacz" type="button">Włącz automat</button>
+        <button id="a-wylacz" type="button" class="drugi" hidden>Wyłącz i usuń klucz</button>
+      </div>
+      <h3>Powiadomienia</h3>
+      <div class="przyciski">
+        <button id="p-wlacz" type="button" class="drugi">Włącz na tym urządzeniu</button>
+        <button id="p-test" type="button" class="drugi" hidden>Wyślij próbne</button>
+      </div>
+      <p class="info" id="p-stan"></p>
+    </section>
+    </div>
 
     <div>
       <!-- ===== postęp ===== -->
