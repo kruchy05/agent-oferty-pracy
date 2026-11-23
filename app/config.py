@@ -49,9 +49,9 @@ class Ustawienia(BaseSettings):
 
     # API (FastAPI)
     api_maks_szukan: int = 2                 # ile płatnych szukań może iść naraz - kolejne dostaną 429
-    # True = gdy ktoś nie poda swojego klucza, API weźmie MÓJ z .env (wygodne lokalnie).
-    # Przed wystawieniem strony do internetu ustawić False, inaczej ktoś obcy szuka na mój koszt
-    api_klucz_serwera: bool = True
+    # False (domyślnie, bezpiecznie) = serwer NIGDY nie używa swojego klucza; każdy podaje własny.
+    # True tylko lokalnie dla wygody: przy pustym polu API weźmie MÓJ klucz z .env.
+    api_klucz_serwera: bool = False
     api_limit_dzienny: int = 10              # ile szukań na dobę może zrobić jedna osoba (jeden klucz)
 
     # tajny klucz serwera - z niego liczę identyfikator użytkownika z klucza API (HMAC).

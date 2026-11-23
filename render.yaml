@@ -1,0 +1,20 @@
+# Blueprint dla Render (https://render.com). Sekrety (sync: false) ustawiasz w panelu Render,
+# nie w repozytorium. Baza to osobny darmowy Postgres na Neon (zmienna DATABASE_URL).
+# NIE ustawiaj ANTHROPIC_API_KEY ani API_KLUCZ_SERWERA - każdy podaje swój klucz na stronie.
+services:
+  - type: web
+    name: agent-oferty-pracy
+    runtime: docker
+    plan: free
+    healthCheckPath: /info
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SEKRET_SERWERA
+        sync: false
+      - key: VAPID_PRYWATNY
+        sync: false
+      - key: VAPID_PUBLICZNY
+        sync: false
+      - key: VAPID_KONTAKT
+        sync: false
