@@ -313,6 +313,16 @@ Na stronie „Wczytaj z CV (PDF)”: PDF idzie do Claude jako blok `document`, a
 - Przed wysłaniem sprawdzam, czy plik to PDF i ma maks. 5 MB (serwer przerywa wczytywanie większych), oraz w Models API, czy model czyta PDF-y - zły plik nic nie kosztuje.
 - Koszt: CV na 1-2 strony to ułamek grosza na Haiku.
 
+## Wdrożenie w internecie (Render + Neon)
+
+Żeby inni korzystali przez sam link, bez instalowania czegokolwiek, aplikacja stoi na darmowym hostingu: **Render** buduje ją z `Dockerfile` i daje HTTPS, a baza to darmowy **Neon** (Postgres bez limitu czasu). Każdy używa **własnego** klucza API wklejanego na stronie - serwer nie ma swojego (`API_KLUCZ_SERWERA` domyślnie wyłączone).
+
+Kroki:
+1. **Neon**: załóż konto, utwórz projekt, skopiuj connection string jako `DATABASE_URL`.
+2. **Render**: New -> Web Service -> z repozytorium GitHub, runtime **Docker**, plan **Free**.
+3. W Render -> Environment ustaw zmienne: `DATABASE_URL` (z Neon), `SEKRET_SERWERA`, `VAPID_PRYWATNY`, `VAPID_PUBLICZNY` (stałe sekrety - bez nich użytkownicy tracą dane przy każdym wdrożeniu), `VAPID_KONTAKT=mailto:twoj@mail`. **Nie** ustawiaj `ANTHROPIC_API_KEY` ani `API_KLUCZ_SERWERA`.
+4. Deploy. Plik `render.yaml` opisuje tę konfigurację. Pierwsze wejście po przerwie budzi się ~minutę (plan Free usypia po 15 min).
+
 ## Testy
 
 88 testów w `tests/`. Nie potrzebują klucza API ani internetu i nic nie kosztują:
